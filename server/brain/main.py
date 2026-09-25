@@ -39,12 +39,14 @@ import secrets
 import sys
 import threading
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import websockets
 
 from . import config, mouth, personality
 from .devices import Device, Registry, RoleTaken, parse_roles, roles_text
-from .thinking import Interrupted, RobotBrain
+from .thinking import Interrupted, RobotBrain, Situation
 from .ears import Ears, normalize, strip_wake_word
 from .eyes import Eyes
 from .tracker import Tracker
@@ -386,6 +388,41 @@ ABILITIES = {
     "look": _sync(look),
     "track_face": _sync(lambda args: set_tracking(bool(args.get("on", True)))),
 }
+
+
+PART_NAMES = {  # role -> how Rocky thinks of that part
+    "speaker": "voice",
+    "mic": "ears",
+    "camera": "camera",
+    "neck": "head (turning)",
+    "face": "face screen",
+}
+
+
+def situation(now: datetime | None = None, roles: set[str] | None = None) -> Situation:
+    """What Rocky is told with each question: the time, and which parts of
+    his body are connected. Abilities that need a missing part (looking,
+    face tracking) are not offered at all, so he can't pretend to use them."""
+    if now is None:
+        try:
+            now = datetime.now(ZoneInfo(config.TIMEZONE))
+        except Exception:  # unknown zone name: fall back to this computer's clock
+            now = datetime.now().astimezone()
+    if roles is None:
+        roles = {r for d in devices for r in d.roles}
+    offset = now.utcoffset()
+    hours = offset.total_seconds() / 3600 if offset is not None else 0
+    utc = f"UTC{hours:+g}" if hours else "UTC"
+    when = f"{now:%A, %B} {now.day}, {now.year}, {now.hour % 12 or 12}:{now:%M} {'AM' if now.hour < 12 else 'PM'} {now:%Z} ({utc})"
+    have = [PART_NAMES[r] for r in PART_NAMES if r in roles]
+    missing = [PART_NAMES[r] for r in PART_NAMES if r not in roles]
+    parts = f"connected: {', '.join(have) if have else 'nothing (you are only a voice on the computer)'}"
+    if missing:
+        parts += f"; not connected: {', '.join(missing)}"
+    if "camera" not in roles:
+        parts += ". You cannot see anything right now"
+    abilities = {"look", "track_face"} if {"camera", "neck"} <= roles else set()
+    return Situation(note=f"(Now: {when}. Your parts {parts}.)", abilities=frozenset(abilities))
 
 
 def wants_camera(question: str) -> bool:
@@ -994,7 +1031,7 @@ async def main() -> None:
     global tracker, brain, main_loop
     loop = asyncio.get_running_loop()
     main_loop = loop
-    brain = RobotBrain(ABILITIES)
+    brain = RobotBrain(ABILITIES, situation)
     tracker = Tracker(eyes, lambda p, t, on: loop.call_soon_threadsafe(head_moves.put_nowait, (p, t, on)))
     eyes.has_annotator = True
     tracker.start()

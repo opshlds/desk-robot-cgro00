@@ -85,6 +85,15 @@ TOOLS = [
 
 
 @dataclass
+class Situation:
+    """What is true right now, told to the model with each question: a short
+    note (the time, which parts of the body are connected) and which
+    abilities can actually work (None = all of them)."""
+    note: str = ""
+    abilities: frozenset[str] | None = None
+
+
+@dataclass
 class Reply:
     text: str
     emotion: str
@@ -100,7 +109,11 @@ def _image_part(jpeg: bytes) -> dict:
 
 
 class RobotBrain:
-    def __init__(self, actions: dict[str, Action] | None = None) -> None:
+    def __init__(
+        self,
+        actions: dict[str, Action] | None = None,
+        situation: Callable[[], Situation] | None = None,
+    ) -> None:
         self.client = openai.OpenAI(
             base_url=config.LLM_BASE_URL,
             api_key=os.environ.get("LLM_API_KEY", "missing"),
@@ -108,6 +121,8 @@ class RobotBrain:
         )
         self.history: list[dict] = []
         self.actions = actions or {}
+        self.situation = situation      # called once per question
+        self._tools: list[dict] = []    # abilities offered for the question being answered
         self.emotion = "neutral"        # emotion of the reply in progress
         self._inflight: tuple[int, dict] | None = None  # (index, user message) being answered
 
@@ -140,6 +155,13 @@ class RobotBrain:
             content.append(_image_part(jpeg))
         elif camera_wanted:
             content.append({"type": "text", "text": "(Your camera has no fresh picture right now, so you cannot see anything at the moment.)"})
+        now = self.situation() if self.situation is not None else Situation()
+        if now.note:
+            # On the question, not the system prompt: the system prompt stays
+            # identical every turn, so the model server can reuse its cache.
+            content.append({"type": "text", "text": now.note})
+        self._tools = [t for t in TOOLS if t["function"]["name"] in self.actions
+                       and (now.abilities is None or t["function"]["name"] in now.abilities)]
         user_msg = {"role": "user", "content": content}
         self.history.append(user_msg)
         mark = len(self.history) - 1
@@ -206,7 +228,7 @@ class RobotBrain:
                 model=config.MODEL,
                 max_tokens=200,  # backstop; the sentence limit does the real work
                 messages=[{"role": "system", "content": personality.SYSTEM_PROMPT}, *self.history],
-                tools=TOOLS if self.actions else openai.NOT_GIVEN,
+                tools=self._tools or openai.NOT_GIVEN,
                 stream=True,
             )
             buf = ""                 # text not yet released as a sentence

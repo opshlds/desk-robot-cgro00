@@ -215,5 +215,9 @@ TRACK_TILT_MIN = -60.0     # must match TILT_MIN/MAX_DEG in firmware config.h
 TRACK_TILT_MAX = 0.0
 TRACK_LOST_SECONDS = 4.0   # no face this long → idle glances resume
 
+# Rocky is told the date and time with every question, in this time zone
+# (an IANA name; TIMEZONE in server/.env overrides it).
+TIMEZONE = os.environ.get("TIMEZONE") or "America/New_York"
+
 # How many conversation turns to remember before forgetting the oldest.
 MAX_HISTORY_TURNS = 20
