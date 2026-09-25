@@ -127,8 +127,8 @@ STT_PROMPT = f"Hey {ROBOT_NAME}. {ROBOT_NAME} is a robot."  # name hint for the 
 #               Falls back to the local model if Speaches can't be reached.
 #   "local"     faster-whisper in this process, on the CPU (STT_MODEL above).
 STT_BACKEND = "speaches"
-SPEACHES_URL = "http://localhost:8000/v1"
-SPEACHES_MODEL = "Systran/faster-whisper-base.en"  # any model id Speaches lists at /v1/models
+SPEACHES_URL = "http://localhost:8010/v1"
+SPEACHES_MODEL = "Systran/faster-distil-whisper-small.en"  # any model id Speaches lists at /v1/models
 MIC_SOURCE = "robot"      # "robot" = the robot's mic, "mac" = MIC_DEVICE below,
                          # "auto" = robot when it's connected, else this computer
 MIC_DEVICE = os.environ.get("MIC_DEVICE") or None  # local input by name (set MIC_DEVICE in
