@@ -38,8 +38,8 @@ HUMAN_NAME = os.environ.get("HUMAN_NAME", "friend")
 #
 # The model must accept images (Rocky sends camera frames) and tool calls
 # (he moves his head with them).
-LLM_BASE_URL = "https://openrouter.ai/api/v1"
-MODEL = "anthropic/claude-haiku-4.5"
+LLM_BASE_URL = "http://localhost:1234/v1"
+MODEL = "google/gemma-4-26b-a4b-qat"
 
 # WebSocket port the robot connects to.
 PORT = 8765
@@ -110,9 +110,9 @@ STT_MODEL = "base.en"    # faster-whisper model: base.en ~0.3 s per utterance on
 # The Hugging Face commit of that model to download (Systran/faster-whisper-<STT_MODEL>).
 # Pinned so a changed upload can't be loaded unnoticed; set to None to take the latest.
 STT_REVISION = "3d3d5dee26484f91867d81cb899cfcf72b96be6c"
-STT_THREADS = 8          # CPU threads for transcription (0 = library default of 4)
+STT_THREADS = 16          # CPU threads for transcription (0 = library default of 4)
 STT_PROMPT = f"Hey {ROBOT_NAME}. {ROBOT_NAME} is a robot."  # name hint for the model
-MIC_SOURCE = "auto"      # "robot" = the robot's mic, "mac" = MIC_DEVICE below,
+MIC_SOURCE = "robot"      # "robot" = the robot's mic, "mac" = MIC_DEVICE below,
                          # "auto" = robot when it's connected, else this computer
 MIC_DEVICE = os.environ.get("MIC_DEVICE") or None  # local input by name (set MIC_DEVICE in
                          # server/.env); None = system default. List devices: python -m sounddevice
