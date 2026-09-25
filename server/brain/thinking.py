@@ -6,10 +6,11 @@ The request is the OpenAI-style chat API, which OpenRouter, Anthropic and
 OpenAI all serve, so the provider is a base URL and the model is a string
 (config.LLM_BASE_URL / config.MODEL; the key is LLM_API_KEY in server/.env).
 
-Rocky has two real abilities the model can call (tool use): `look` moves
-the head and comes back with a fresh camera frame from the new angle, and
-`track_face` starts/stops following the human. main.py supplies the
-functions that actually do those things.
+Rocky has real abilities the model can call (tool use): `look` moves the
+head and comes back with a fresh camera frame from the new angle,
+`track_face` starts/stops following the human, and `time_in` gives the exact
+time somewhere else (brain/clock.py). main.py supplies the functions that
+actually do those things.
 """
 
 from __future__ import annotations
@@ -66,6 +67,28 @@ TOOLS = [
                     },
                 },
                 "required": ["direction"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "time_in",
+            "description": (
+                "The exact local time and date somewhere else, and how far ahead or behind "
+                "your human it is. Use it for ANY question about the time in another city, "
+                "country or time zone, or the time difference to one. Never work time "
+                "differences out yourself; read the answer this gives you."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "place": {
+                        "type": "string",
+                        "description": "An IANA time zone name if you know it (Asia/Dhaka, Europe/London), else the city or country.",
+                    },
+                },
+                "required": ["place"],
             },
         },
     },

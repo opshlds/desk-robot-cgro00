@@ -44,7 +44,7 @@ from zoneinfo import ZoneInfo
 
 import websockets
 
-from . import config, mouth, personality
+from . import clock, config, mouth, personality
 from .devices import Device, Registry, RoleTaken, parse_roles, roles_text
 from .thinking import Interrupted, RobotBrain, Situation
 from .ears import Ears, normalize, strip_wake_word
@@ -387,6 +387,7 @@ main_loop: asyncio.AbstractEventLoop | None = None
 ABILITIES = {
     "look": _sync(look),
     "track_face": _sync(lambda args: set_tracking(bool(args.get("on", True)))),
+    "time_in": lambda args: (clock.time_in(str(args.get("place", ""))), None),  # no hardware needed
 }
 
 
@@ -421,7 +422,9 @@ def situation(now: datetime | None = None, roles: set[str] | None = None) -> Sit
         parts += f"; not connected: {', '.join(missing)}"
     if "camera" not in roles:
         parts += ". You cannot see anything right now"
-    abilities = {"look", "track_face"} if {"camera", "neck"} <= roles else set()
+    abilities = {"time_in"}  # needs nothing but a clock
+    if {"camera", "neck"} <= roles:
+        abilities |= {"look", "track_face"}
     return Situation(note=f"(Now: {when}. Your parts {parts}.)", abilities=frozenset(abilities))
 
 

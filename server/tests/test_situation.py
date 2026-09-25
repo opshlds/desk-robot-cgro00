@@ -21,19 +21,19 @@ class SituationNote(unittest.TestCase):
         self.assertIn("connected: voice, ears", s.note)
         self.assertIn("not connected: camera", s.note)
         self.assertIn("cannot see anything", s.note)
-        self.assertEqual(s.abilities, frozenset())
+        self.assertEqual(s.abilities, {"time_in"})
 
     def test_whole_robot(self):
         s = main.situation(datetime(2026, 12, 1, 9, 5, tzinfo=NY), set(ROLES))
         self.assertIn("9:05 AM EST (UTC-5)", s.note)
         self.assertNotIn("not connected", s.note)
         self.assertNotIn("cannot see", s.note)
-        self.assertEqual(s.abilities, {"look", "track_face"})
+        self.assertEqual(s.abilities, {"look", "track_face", "time_in"})
 
     def test_camera_without_neck_can_see_but_not_look(self):
         s = main.situation(datetime(2026, 9, 25, 12, 0, tzinfo=NY), {"mic", "speaker", "camera"})
         self.assertNotIn("cannot see", s.note)
-        self.assertEqual(s.abilities, frozenset())
+        self.assertEqual(s.abilities, {"time_in"})
         self.assertIn("12:00 PM", s.note)
 
     def test_prompt_explains_the_note(self):
