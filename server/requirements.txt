@@ -7,3 +7,4 @@ onnxruntime==1.29.0     # Silero VAD + Smart Turn end-of-turn models (brain/turn
 sounddevice==0.5.6     # Mac microphone (fallback when the robot is offline)
 numpy==2.5.2
 opencv-python-headless==5.0.0.93  # face tracking (YuNet model in models/)
+opuslib_next==1.3.1     # Opus for the Xiaozhi bridge (bridge/xiaozhi.py); needs the system libopus (apt install libopus0)
