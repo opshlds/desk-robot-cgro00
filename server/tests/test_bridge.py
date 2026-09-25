@@ -130,7 +130,7 @@ class FakeBoard:
     async def open(self, url, token):
         self.ws = await connect(url, additional_headers={
             "Authorization": f"Bearer {token}", "Protocol-Version": "1", "Device-Id": MAC,
-            "Client-Id": "ff3721bc-7009-4e04-bbb0-96cd183f6336"}, user_agent_header="esp-box-lite/2.2.6")
+            "Client-Id": "ff3721bc-7009-4e04-bbb0-96cd183f6336"}, user_agent_header=None)
         await self.ws.send(json.dumps({"type": "hello", "version": 1, "features": {"mcp": True},
                                        "transport": "websocket",
                                        "audio_params": {"format": "opus", "sample_rate": 16000,
@@ -217,6 +217,7 @@ class BridgeEndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hello["audio_params"]["sample_rate"], 16000)
         await asyncio.sleep(0.3)
         roles = {r for d in brainmain.devices.summary() for r in d["roles"]}
+        self.assertEqual([d["fw"] for d in brainmain.devices.summary()], ["2.2.6"])  # learned from the OTA check
         self.assertEqual(roles, {"mic", "speaker"})
 
         # Wake word audio comes before "listen detect" and must not reach the brain.
@@ -313,6 +314,12 @@ class BridgePieces(unittest.TestCase):
         self.assertEqual(r["server_time"]["timestamp"], 1_790_000_000_000)
         self.assertTrue(r["websocket"]["url"].endswith("/xiaozhi/v1/"))
         self.assertNotIn("mqtt", r)  # no MQTT section = the board uses the WebSocket
+
+    def test_firmware_version(self):
+        self.assertEqual(bridge.firmware_version({"application": {"version": "2.2.6"}}), "2.2.6")
+        self.assertEqual(bridge.firmware_version({}, "esp-box-lite/2.2.6"), "2.2.6")
+        self.assertEqual(bridge.firmware_version({"application": "x"}, ""), "?")
+        self.assertEqual(bridge.firmware_version({}), "?")
 
     def test_allowlist(self):
         self.assertTrue(bridge.device_allowed("80:45:6B:24:76:30"))

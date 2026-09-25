@@ -72,6 +72,22 @@ def device_allowed(device_id: str) -> bool:
     return not ALLOWED or device_id.strip().lower() in ALLOWED
 
 
+# Firmware version of each board, learned from its OTA check at boot: the
+# board only reports it there (body + User-Agent), not on the WebSocket.
+known_fw: dict[str, str] = {}
+
+
+def firmware_version(body: dict, user_agent: str = "") -> str:
+    """The version a board reports: application.version in the OTA body,
+    else the tail of its User-Agent ("esp-box-lite/2.2.6"), else "?"."""
+    version = (body.get("application") or {}).get("version") if isinstance(body.get("application"), dict) else None
+    if version:
+        return str(version)
+    if "/" in user_agent:
+        return user_agent.rsplit("/", 1)[-1].strip() or "?"
+    return "?"
+
+
 def ota_reply(body: dict, now: float | None = None) -> dict:
     """What the board gets back from its OTA check at boot: where the
     WebSocket is, the time, and "your firmware is current" (we never update
@@ -149,7 +165,11 @@ async def handle_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                 body = json.loads(raw) if raw else {}
             except json.JSONDecodeError:
                 body = {}
-            payload = ota_reply(body if isinstance(body, dict) else {})
+            body = body if isinstance(body, dict) else {}
+            payload = ota_reply(body)
+            fw = firmware_version(body, headers.get("user-agent", ""))
+            if fw != "?":
+                known_fw[device_id.lower()] = fw
             status = HTTPStatus.OK
             log(f"OTA: {device_id} ({headers.get('user-agent', '?')}) -> {payload['websocket']['url']}")
         data = json.dumps(payload).encode()
@@ -384,8 +404,10 @@ class Session:
         params = hello.get("audio_params") or {}
         if params.get("format", "opus") != "opus" or int(params.get("sample_rate", SAMPLE_RATE)) != SAMPLE_RATE:
             log(f"[{self.device_id}] unexpected audio params {params}; carrying on at 16 kHz Opus")
-        ua = self.dev.request.headers.get("User-Agent", "")
-        self.fw = ua.split("/")[-1] if "/" in ua else "?"
+        # The WebSocket handshake doesn't carry the version; the OTA check did.
+        self.fw = firmware_version({}, self.dev.request.headers.get("User-Agent", ""))
+        if self.fw == "?":
+            self.fw = known_fw.get(self.device_id.lower(), "?")
 
         token = os.environ.get("ROBOT_TOKEN", "")
         try:
