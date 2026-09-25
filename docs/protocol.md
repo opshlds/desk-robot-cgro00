@@ -2,8 +2,34 @@
 
 The robot connects to `ws://<mac-ip>:8765`. The first message must be a
 `hello` carrying the shared `ROBOT_TOKEN` (server/.env, firmware secrets.h);
-the server drops anything else without replying, and allows one robot at a
-time. Plain `ws://` on the home LAN — no TLS in v1. Text frames are JSON. Binary
+the server drops anything else without replying.
+
+## Several boards, one robot
+
+A robot can be several boards, each doing some of the jobs. The hello says
+which with `"roles"`: any of `mic`, `speaker`, `camera`, `neck`, `face`.
+No `roles` = the classic single board, which has all of them. Each role
+belongs to one board at a time: a board asking for a role that another
+connected board holds is closed with code 1013 (it should retry; that is
+also what happens while a rebooted board's old connection is still
+timing out). The server sends each command only to the boards whose roles
+it concerns (`server/brain/devices.py`, ROUTES):
+
+| Server -> board | Goes to |
+|---|---|
+| `speak_begin`, `speak_end`, `volume`, TTS audio | speaker |
+| `mic` | mic |
+| `stream` | camera |
+| `pan`, `tilt`, `glance` | neck |
+| `emotion`, `asleep` | every board |
+
+and only accepts board messages from the matching role: mic audio from the
+mic, camera frames from the camera, `speak_done` and `abort` from the
+speaker, `wake` from the mic.
+
+HAIL-E's layout: the Yahboom voice board (through `server/bridge/`, which
+translates the Xiaozhi protocol) = `mic` + `speaker`; the XIAO = `camera`
+(+ `neck` later); the AMOLED = `face`. Plain `ws://` on the home LAN — no TLS in v1. Text frames are JSON. Binary
 frames start with one type byte: `0x01` = mic audio, `0x02` = camera JPEG.
 The rest of the frame is the payload.
 
@@ -11,6 +37,9 @@ The rest of the frame is the payload.
 
 ```json
 {"type": "hello", "who": "desk-robot", "fw": "0.3.0", "token": "..."}  // must be the first message; token = ROBOT_TOKEN
+{"type": "hello", "who": "xiaozhi-bridge", "fw": "2.2.6", "token": "...", "roles": ["mic", "speaker"]}  // a board with some roles
+{"type": "wake", "word": "Computer"}   // mic: the board's own wake word fired; stay awake, the question follows
+{"type": "abort"}                 // speaker: the human interrupted; stop the reply that is playing
 {"type": "state", "pan": 12.5, "emotion": "neutral"}
 {"type": "temp", "c": 52.0}       // chip temperature, sent every ~10 s
 {"type": "speak_done"}            // finished playing the last reply

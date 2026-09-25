@@ -43,12 +43,14 @@ import time
 import websockets
 
 from . import config, mouth, personality
+from .devices import Device, Registry, RoleTaken, parse_roles, roles_text
 from .thinking import Interrupted, RobotBrain
 from .ears import Ears, normalize, strip_wake_word
 from .eyes import Eyes
 from .tracker import Tracker
 
-robot_socket: websockets.ServerConnection | None = None
+devices = Registry()  # the connected boards and which roles each one has (brain/devices.py)
+current_reply: "SpokenReply | None" = None  # the reply being spoken right now, if any
 brain: RobotBrain | None = None  # created in main() once the event loop exists
 ears: Ears | None = None
 # (text, when speech began, when it ended, when the transcript was ready)
@@ -79,15 +81,29 @@ VOICE_TUNABLE = {           # speaker tuning the console may change live (mouth.
 }
 
 
+async def _send(conn, data) -> bool:
+    """Send to one board; a board that just went away is not an error."""
+    try:
+        await conn.send(data)
+        return True
+    except websockets.ConnectionClosed:
+        return False
+
+
 async def send_to_robot(payload: dict) -> bool:
+    """Send a command to whichever connected boards handle it (devices.ROUTES):
+    head moves to the neck, speaker commands to the speaker, and so on."""
     global current_emotion
     if payload.get("type") == "emotion":
         current_emotion = payload.get("name", current_emotion)
-    if robot_socket is None:
-        print("(no robot connected — command not sent)")
+    targets = devices.targets(payload.get("type", ""))
+    if not targets:
+        if len(devices) == 0:
+            print("(no robot connected — command not sent)")
         return False
-    await robot_socket.send(json.dumps(payload))
-    return True
+    text = json.dumps(payload)
+    sent = [await _send(conn, text) for conn in targets]
+    return any(sent)
 
 
 def pick_mic_source() -> None:
@@ -95,7 +111,7 @@ def pick_mic_source() -> None:
     if ears is None:
         return
     if config.MIC_SOURCE == "auto":
-        source = "robot" if robot_socket is not None else "mac"
+        source = "robot" if devices.owner("mic") is not None else "mac"
     else:
         source = config.MIC_SOURCE
     if source != ears.source:
@@ -107,7 +123,6 @@ def pick_mic_source() -> None:
 
 
 async def handle_robot(websocket: websockets.ServerConnection) -> None:
-    global robot_socket
     peer = websocket.remote_address[0] if websocket.remote_address else "?"
     # Anyone on the WiFi can reach this port, so the first message must be a
     # hello carrying the shared token from server/.env. Anything else is
@@ -129,25 +144,41 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
         print(f"(refused a connection from {peer}: bad or missing token)")
         await websocket.close(1008)
         return
-    if robot_socket is not None:
-        print(f"(refused a second robot from {peer}: one is already connected)")
+    # Which jobs this board does (brain/devices.py). No "roles" = the classic
+    # all-in-one desk-robot, which does everything.
+    try:
+        roles = parse_roles(hello)
+    except ValueError as e:
+        print(f"(refused a board from {peer}: {e})")
+        await websocket.close(1008)
+        return
+    device = Device(websocket, roles, who=str(hello.get("who", "?")), fw=str(hello.get("fw", "?")), peer=peer)
+    try:
+        devices.add(device)
+    except RoleTaken as e:
+        # When a board reboots, its new connection can arrive before the old
+        # one is noticed as dead; it retries and gets in once the old one drops.
+        print(f"(refused {device.who} from {peer}: {e})")
         await websocket.close(1013)
         return
-    robot_socket = websocket
-    print(f"robot connected! (fw {hello.get('fw', '?')}, {peer})")
+    print(f"board connected: {device.describe()}")
     pick_mic_source()
-    if config.MIC_SOURCE in ("auto", "robot"):
-        await send_to_robot({"type": "mic", "on": True})
-    await send_to_robot({"type": "stream", "on": True, "fps": config.CAMERA_FPS})
-    # No idle head glances: they fight deliberate looks. The eyes still move.
-    await send_to_robot({"type": "glance", "on": False})
+    if "mic" in roles and config.MIC_SOURCE in ("auto", "robot"):
+        await _send(websocket, json.dumps({"type": "mic", "on": True}))
+    if "camera" in roles:
+        await _send(websocket, json.dumps({"type": "stream", "on": True, "fps": config.CAMERA_FPS}))
+    if "neck" in roles:
+        # No idle head glances: they fight deliberate looks. The eyes still move.
+        await _send(websocket, json.dumps({"type": "glance", "on": False}))
+    if "face" in roles:
+        await _send(websocket, json.dumps({"type": "emotion", "name": current_emotion}))
     try:
         async for message in websocket:
             if isinstance(message, bytes):
                 kind = message[:1]
-                if kind == b"\x01" and ears is not None and len(message) % 2 == 1:
+                if kind == b"\x01" and "mic" in roles and ears is not None and len(message) % 2 == 1:
                     ears.push_audio(message[1:])  # 1 type byte + whole 16-bit samples
-                elif kind == b"\x02":
+                elif kind == b"\x02" and "camera" in roles:
                     eyes.push_frame(message[1:])
                 continue
             try:
@@ -156,27 +187,56 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
                 continue
             if not isinstance(event, dict):
                 continue
-            if event.get("type") == "state":
+            kind = event.get("type")
+            if kind == "state":
                 continue  # heartbeat every 5 s; not worth the console space
-            if event.get("type") == "speak_done":
+            if kind == "speak_done" and "speaker" in roles:
                 robot_speak_done.set()
                 continue
-            if event.get("type") == "temp":
+            if kind == "temp":
                 try:
                     eyes.temperature = float(event.get("c"))
                 except (TypeError, ValueError):
                     pass  # not a number; leave the last reading
                 continue
-            print(f"robot: {event}")
+            if kind == "wake" and "mic" in roles:
+                # The board heard its own wake word (the Yahboom does this on
+                # the chip), so the audio that follows won't contain "hey Rocky".
+                asyncio.create_task(board_woke(str(event.get("word", ""))))
+                continue
+            if kind == "abort" and "speaker" in roles:
+                # The human interrupted (wake word while Rocky was talking).
+                stop_speaking("interrupted by the wake word")
+                continue
+            print(f"{device.who}: {event}")
     except websockets.ConnectionClosed:
         pass
     finally:
-        # Only clear the slot if it's still ours: when the robot reboots, the
-        # new connection can arrive before the old one is noticed as dead.
-        if robot_socket is websocket:
-            robot_socket = None
-            print("robot disconnected")
+        if devices.remove(websocket) is not None:
+            print(f"board disconnected: {device.who} [{roles_text(roles)}]")
+            if "speaker" in roles:
+                robot_speak_done.set()  # don't leave a reply waiting for a board that's gone
             pick_mic_source()
+
+
+async def board_woke(word: str) -> None:
+    """A board's own wake word fired: same as hearing "hey Rocky" with no
+    question yet, except there's nothing to say — the question is already
+    on its way, and talking now would drown it out."""
+    global awake_until
+    awake_until = time.time() + config.AWAKE_SECONDS
+    print(f"(woken by the board's wake word{': ' + word if word else ''} — listening)")
+    await send_to_robot({"type": "asleep", "on": False})
+    await send_to_robot({"type": "emotion", "name": "surprised"})
+
+
+def stop_speaking(why: str) -> None:
+    """Cut the reply that is playing now (if any) and stop sending its audio."""
+    reply = current_reply
+    if reply is None:
+        return
+    print(f"  ({why} — stopping)")
+    reply.stop()
 
 
 async def handle_console_line(line: str) -> bool:
@@ -191,7 +251,10 @@ async def handle_console_line(line: str) -> bool:
     if cmd == "quit":
         return False
     if cmd == "status":
-        print("robot connected" if robot_socket else "no robot connected")
+        if len(devices) == 0:
+            print("no robot connected")
+        for d in devices:
+            print(f"connected: {d.describe()}")
     elif cmd == "emo":
         if arg in config.EMOTIONS:
             await send_to_robot({"type": "emotion", "name": arg})
@@ -449,14 +512,18 @@ class SpokenReply:
         first = get.result()
         if first is None:
             return True  # nothing to say
+        global current_reply
+        current_reply = self
         if ears is not None:
             ears.muted.set()
         try:
-            if robot_socket is not None:
-                await self._play_robot(first)
+            speaker = devices.conn_for("speaker")
+            if speaker is not None:
+                await self._play_robot(first, speaker)
             else:
                 await self._play_mac(first)
         finally:
+            current_reply = None
             if ears is not None:
                 ears.muted.clear()
         self.tl.mark("done")
@@ -468,8 +535,16 @@ class SpokenReply:
         self.sentences.put(None)  # wake the voice thread so it can exit
         self.audio.put(None)
 
-    async def _play_robot(self, first: bytes) -> None:
-        """Stream PCM to the robot (docs/protocol.md) and wait until it has played."""
+    def stop(self) -> None:
+        """Interrupted while speaking: stop generating and sending. What was
+        already said stays in his memory."""
+        self.cancel.set()
+        self.sentences.put(None)
+        self.audio.put(None)
+        robot_speak_done.set()
+
+    async def _play_robot(self, first: bytes, speaker) -> None:
+        """Stream PCM to the speaker board (docs/protocol.md) and wait until it has played."""
         robot_speak_done.clear()
         # bytes 0 = length unknown: the robot starts after 200 ms of buffer.
         await send_to_robot({"type": "speak_begin", "bytes": 0})
@@ -477,19 +552,21 @@ class SpokenReply:
         buf = bytearray()
         total = 0
         chunk: bytes | None = first
-        while chunk is not None:
-            buf += chunk
+        while chunk is not None and not self.cancel.is_set():
+            if chunk:
+                buf += chunk
             while len(buf) >= FRAME_BYTES:
-                if robot_socket is None:
-                    return
-                await robot_socket.send(b"\x01" + bytes(buf[:FRAME_BYTES]))
+                if not await _send(speaker, b"\x01" + bytes(buf[:FRAME_BYTES])):
+                    return  # the speaker board went away
                 del buf[:FRAME_BYTES]
                 total += FRAME_BYTES
             chunk = await self._next()
-        if buf and robot_socket is not None:
-            await robot_socket.send(b"\x01" + bytes(buf))
+        if buf and not self.cancel.is_set():
+            await _send(speaker, b"\x01" + bytes(buf))
             total += len(buf)
         await send_to_robot({"type": "speak_end"})
+        if self.cancel.is_set():
+            return
         try:
             await asyncio.wait_for(robot_speak_done.wait(), timeout=total / 32000 + 5)
         except asyncio.TimeoutError:
@@ -602,7 +679,8 @@ def console_state() -> dict:
     """Extra fields for /status: everything the page shows beyond the camera."""
     now = time.time()
     return {
-        "robot": robot_socket is not None,
+        "robot": len(devices) > 0,
+        "devices": devices.summary(),
         "listening": ears is not None,
         "mic": ears.source if ears is not None else None,
         "level": ears.level if ears is not None else 0.0,
