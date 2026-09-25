@@ -165,6 +165,8 @@ SLEEP_PHRASES = [        # any of these puts him to sleep until the next "hey <n
     "stop listening",
 ]
 # What he says as he goes to sleep: personality.py, LINES.
+SLEEP_DELAY_SECONDS = 1.5  # after his goodnight line has played, wait this long before he
+                           # actually sleeps (sleep ends the voice board's session)
 
 # Emotions the firmware knows how to display (see firmware/src/face.cpp).
 EMOTIONS = [

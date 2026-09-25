@@ -221,6 +221,8 @@ class Session:
         self.discard = False          # drop brain audio until the next speak_begin (after an abort)
         self.awaiting_done = False    # tts stop sent; waiting for the board to finish playing
         self.done_timer: asyncio.TimerHandle | None = None
+        self.sleep_pending = False    # brain went to sleep mid-reply: close once it has played
+        self.sleep_deadline: asyncio.TimerHandle | None = None
         self.mic_on = True
         self.new_reply = True        # restart the real-time clock for the next frame sent
         self.tools: set[str] = set()
@@ -258,6 +260,19 @@ class Session:
             self.done_timer.cancel()
             self.done_timer = None
         asyncio.ensure_future(self.to_brain({"type": "speak_done"}))
+        if self.sleep_pending:
+            self.close_for_sleep()
+
+    def close_for_sleep(self) -> None:
+        self.cancel_sleep()
+        log(f"[{self.device_id}] brain went to sleep: closing the board's channel")
+        asyncio.ensure_future(self.dev.close(1000, "asleep"))
+
+    def cancel_sleep(self) -> None:
+        self.sleep_pending = False
+        if self.sleep_deadline is not None:
+            self.sleep_deadline.cancel()
+            self.sleep_deadline = None
 
     def drop_output(self) -> None:
         while not self.out.empty():
@@ -327,6 +342,7 @@ class Session:
                 continue
             kind = ev.get("type") if isinstance(ev, dict) else None
             if kind == "speak_begin":
+                self.cancel_sleep()  # talking again: he's awake after all
                 self.drop_output()
                 self.discard = False
                 self.new_reply = True
@@ -355,9 +371,15 @@ class Session:
             elif kind == "mic":
                 self.mic_on = bool(ev.get("on", True))
             elif kind == "asleep" and ev.get("on"):
-                log(f"[{self.device_id}] brain dozed off: closing the board's channel")
-                await self.dev.close(1000, "asleep")
-                return
+                # Never cut off a reply. If one is still arriving or playing, note
+                # it and keep reading (the rest of its audio is queued behind this
+                # message); the channel closes once the board has played it out.
+                if self.speaking or self.awaiting_done or not self.out.empty():
+                    log(f"[{self.device_id}] brain went to sleep: closing after the current reply")
+                    self.sleep_pending = True
+                    self.sleep_deadline = asyncio.get_running_loop().call_later(20.0, self.close_for_sleep)
+                else:
+                    self.close_for_sleep()
 
     async def to_device_paced(self) -> None:
         """Send reply frames in real time (a few ahead), then tts stop."""
@@ -439,6 +461,7 @@ class Session:
                 t.cancel()
             if self.done_timer is not None:
                 self.done_timer.cancel()
+            self.cancel_sleep()
             code = getattr(self.brain, "close_code", None)
             await self.brain.close()
             await self.dev.close()

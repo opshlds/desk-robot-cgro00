@@ -785,10 +785,8 @@ async def _console_command(action: str, payload: dict) -> dict:
         await set_tracking(bool(payload.get("on", True)))
     elif action == "sleep":
         if payload.get("on", True):
-            awake_until = 0.0
             await send_to_robot({"type": "emotion", "name": "sleepy"})
-            await send_to_robot({"type": "asleep", "on": True})
-            await set_head_held(False)
+            await fall_asleep(told=True)
         else:
             awake_until = time.time() + config.AWAKE_SECONDS
             await send_to_robot({"type": "asleep", "on": False})
@@ -902,18 +900,33 @@ async def head_loop() -> None:
         eyes.tracking_info = {"tracking": tracking, "pan": pan, "tilt": tilt}
 
 
+sleeping = True  # "asleep" has been sent since he was last awake
+
+
+async def fall_asleep(told: bool = False) -> None:
+    """Go to sleep now: only a wake word wakes him. The one place "asleep" is
+    sent: once when he dozes off, always when he's told to sleep."""
+    global awake_until, sleeping
+    awake_until = 0.0
+    if sleeping and not told:
+        return
+    sleeping = True
+    await send_to_robot({"type": "asleep", "on": True})
+    await set_head_held(False)  # idle life resumes; the head may wander again
+
+
 async def doze_loop() -> None:
     """When the awake clock runs out, he nods off on his own (sleepy face,
-    no announcement). Saying "hey Rocky" wakes him again."""
-    was_awake = False
+    no announcement). Saying "hey Rocky" wakes him again. Never while he is
+    speaking: dozing ends the voice board's session."""
+    global sleeping
     while True:
         await asyncio.sleep(1)
-        awake = time.time() < awake_until
-        if was_awake and not awake:
+        if time.time() < awake_until:
+            sleeping = False
+        elif not sleeping and current_reply is None:
             print(f"({config.ROBOT_NAME} dozed off — say \"hey {config.ROBOT_NAME}\" to wake him)")
-            await send_to_robot({"type": "asleep", "on": True})
-            await set_head_held(False)  # idle life resumes; the head may wander again
-        was_awake = awake
+            await fall_asleep()
 
 
 async def _next_heard() -> tuple[str, float, float, float] | None:
@@ -972,13 +985,17 @@ async def _handle_heard(item: tuple[str, float, float, float]) -> None:
         return
     if any(p in norm for p in config.SLEEP_PHRASES):
         # "Rocky, sleep": goodnight line, sleepy face, and only "hey Rocky"
-        # wakes him. No brain call.
-        awake_until = 0.0
+        # wakes him. No brain call. He stays awake until the line has been
+        # heard in full plus a short pause: going to sleep ends the voice
+        # board's session, which would cut him off mid-word.
         print(f"{config.ROBOT_NAME} [sleepy]: {lines['sleep']}")
         await send_to_robot({"type": "emotion", "name": "sleepy"})
-        await say(lines["sleep"])
-        await send_to_robot({"type": "asleep", "on": True})
-        awake_until = 0.0  # say() doesn't touch it, but be explicit
+        awake_until = float("inf")  # hold off the doze check while he says goodnight
+        try:
+            await say(lines["sleep"])
+            await asyncio.sleep(config.SLEEP_DELAY_SECONDS)
+        finally:
+            await fall_asleep(told=True)
         return
     if woke:
         # Heard his name: eyes open, perk up to eye level (tilt can't go

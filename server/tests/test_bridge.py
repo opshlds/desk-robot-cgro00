@@ -38,11 +38,13 @@ from websockets.asyncio.client import connect
 
 from bridge import xiaozhi as bridge
 from brain import main as brainmain
-from brain import mouth
+from brain import config as brainconfig
+from brain import mouth, personality
 
 MAC = "80:45:6b:24:76:30"
 SENTENCES = ["Hello friend.", "Rocky here, question?"]
 SENTENCE_SECONDS = 0.6
+GOODNIGHT_SECONDS = 2.0  # long enough that the old doze check always cut it off
 
 
 def tone(seconds: float, hz: float = 440.0) -> bytes:
@@ -97,7 +99,7 @@ class FakeBrain:
 
 
 def fake_stream(text, leveler=None):
-    pcm = tone(SENTENCE_SECONDS)
+    pcm = tone(SENTENCE_SECONDS if text != personality.LINES["sleep"] else GOODNIGHT_SECONDS)
     for i in range(0, len(pcm), 3200):  # 100 ms chunks, like Kokoro's
         time.sleep(0.01)
         yield pcm[i:i + 3200]
@@ -191,16 +193,20 @@ class BridgeEndToEnd(unittest.IsolatedAsyncioTestCase):
         brainmain.robot_speak_done = asyncio.Event()
         brainmain.devices = brainmain.Registry()
         brainmain.awake_until = 0.0
+        brainmain.sleeping = True
+        brainmain.current_reply = None
         self._stream = mouth.stream
         mouth.stream = fake_stream
         self.brain_server = await websockets.serve(brainmain.handle_robot, "127.0.0.1", 18765)
         self.voice = asyncio.create_task(brainmain.voice_loop())
+        self.doze = asyncio.create_task(brainmain.doze_loop())  # the once-a-second doze check that used to cut him off
         self.bridge = asyncio.create_task(bridge.main())
         await asyncio.sleep(0.3)
 
     async def asyncTearDown(self):
         mouth.stream = self._stream
         self.voice.cancel()
+        self.doze.cancel()
         self.bridge.cancel()
         self.brain_server.close()
         await self.brain_server.wait_closed()
@@ -297,6 +303,47 @@ class BridgeEndToEnd(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(board.closed.wait(), 3)
         await asyncio.sleep(0.3)
         self.assertEqual(len(brainmain.devices), 0)
+
+
+    async def test_goodnight_is_heard_in_full(self):
+        """ "Go to sleep": the whole goodnight line plays, then a pause, then the board's session ends."""
+        brainconfig.SLEEP_DELAY_SECONDS = 0.5
+        board = FakeBoard()
+        ota = await board.ota()
+        await board.open(ota["websocket"]["url"], ota["websocket"]["token"])
+        await board.send({"type": "listen", "state": "detect", "text": "Computer"})
+        await board.send({"type": "listen", "state": "start", "mode": "auto"})
+        self.ears.question = "Rocky, go to sleep"
+        await board.speak(1.2)
+        await asyncio.wait_for(board.tts_stop.wait(), 10)
+        stopped = time.monotonic()
+        heard = sum(len(p) for _, p in board.frames) / 32000
+        self.assertAlmostEqual(heard, GOODNIGHT_SECONDS, delta=0.13)   # every word arrived
+        self.assertFalse(board.closed.is_set())
+        await asyncio.sleep(0.3)                                        # the board drains its speaker...
+        await board.send({"type": "listen", "state": "start", "mode": "auto"})  # ...and says so
+        await asyncio.wait_for(board.closed.wait(), 5)
+        self.assertGreater(time.monotonic() - stopped, 0.3 + brainconfig.SLEEP_DELAY_SECONDS - 0.1)
+        self.assertEqual(brainmain.awake_until, 0.0)
+
+    async def test_bridge_never_cuts_a_reply(self):
+        """Even if "asleep" arrives mid-reply, the bridge lets the reply finish first."""
+        board = FakeBoard()
+        ota = await board.ota()
+        await board.open(ota["websocket"]["url"], ota["websocket"]["token"])
+        await board.send({"type": "listen", "state": "detect", "text": "Computer"})
+        await board.send({"type": "listen", "state": "start", "mode": "auto"})
+        await asyncio.sleep(0.2)
+        speaking = asyncio.create_task(brainmain.say("A fairly long line."))
+        await asyncio.wait_for(board.tts_start.wait(), 5)
+        await brainmain.send_to_robot({"type": "asleep", "on": True})   # rude: mid-reply
+        await asyncio.wait_for(board.tts_stop.wait(), 5)
+        self.assertFalse(board.closed.is_set())
+        await board.send({"type": "listen", "state": "start", "mode": "auto"})
+        await asyncio.wait_for(board.closed.wait(), 3)
+        await speaking
+        heard = sum(len(p) for _, p in board.frames) / 32000
+        self.assertAlmostEqual(heard, SENTENCE_SECONDS, delta=0.13)
 
 
 class BridgePieces(unittest.TestCase):
