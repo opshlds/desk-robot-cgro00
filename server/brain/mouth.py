@@ -1,6 +1,8 @@
 """Mouth: turn the robot's words into sound.
 
-Two voices:
+Voices, tried in order (config.TTS_BACKEND picks the first):
+  * Kokoro on HAIL-E (config.KOKORO_URL), OpenAI-style /v1/audio/speech,
+    streamed as raw 24 kHz PCM and resampled to 16 kHz on the fly.
   * Fish Audio (Rocky's real voice, config.TTS_VOICE_ID) when
     FISH_AUDIO_API_KEY is set. Plain HTTPS POST asking for raw 16 kHz PCM. The response body
     streams, so the first audio arrives ~0.3 s in, long before the sentence
@@ -96,6 +98,74 @@ def _fish_stream(text: str) -> Iterator[bytes]:
                 carry = b""
             if chunk:
                 yield chunk
+
+
+KOKORO_RATE = 24_000  # Kokoro always speaks at 24 kHz
+
+
+def kokoro_available() -> bool:
+    return config.TTS_BACKEND == "kokoro" and bool(config.KOKORO_URL)
+
+
+class Resampler:
+    """Streaming 24 kHz -> 16 kHz (x2 up, low-pass, /3 down) that keeps its
+    state between chunks, so sentence audio can be passed on as it arrives
+    without clicks at the chunk boundaries. Plain linear interpolation would
+    fold everything above 8 kHz back down as hiss."""
+
+    UP, DOWN, TAPS = 2, 3, 97
+
+    def __init__(self) -> None:
+        n = np.arange(self.TAPS) - (self.TAPS - 1) / 2
+        fc = 7_200 / (KOKORO_RATE * self.UP)            # pass band up to 7.2 kHz, of 48 kHz
+        h = 2 * fc * np.sinc(2 * fc * n) * np.hamming(self.TAPS)
+        self.h = (h / h.sum() * self.UP).astype(np.float32)  # x UP makes up for the zeros stuffed in
+        self.hist = np.zeros(self.TAPS - 1, dtype=np.float32)
+        self.phase = 0
+
+    def process(self, pcm: bytes) -> bytes:
+        x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+        if not len(x):
+            return b""
+        up = np.zeros(len(x) * self.UP, dtype=np.float32)
+        up[:: self.UP] = x
+        buf = np.concatenate([self.hist, up])
+        y = np.convolve(buf, self.h, mode="valid")    # len(y) == len(up)
+        out = y[self.phase :: self.DOWN]
+        self.phase = (self.phase - len(up)) % self.DOWN
+        self.hist = buf[-(self.TAPS - 1) :]
+        return np.clip(np.round(out), -32768, 32767).astype(np.int16).tobytes()
+
+
+def _kokoro_stream(text: str) -> Iterator[bytes]:
+    """16 kHz PCM from Kokoro, yielded as the server produces it."""
+    body = json.dumps(
+        {
+            "model": "kokoro",
+            "input": text,
+            "voice": config.KOKORO_VOICE,
+            "response_format": "pcm",   # headerless s16le mono at 24 kHz
+            "speed": config.KOKORO_SPEED,
+            "stream": True,
+        }
+    ).encode()
+    req = urllib.request.Request(
+        config.KOKORO_URL.rstrip("/") + "/audio/speech",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    resampler = Resampler()
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        carry = b""  # a chunk boundary can split a 16-bit sample in half
+        while chunk := resp.read(4096):
+            chunk = carry + chunk
+            if len(chunk) % 2:
+                chunk, carry = chunk[:-1], chunk[-1:]
+            else:
+                carry = b""
+            if chunk and (out := resampler.process(chunk)):
+                yield out
 
 
 class Biquad:
@@ -277,7 +347,7 @@ def _synthesize_builtin(text: str) -> bytes:
         elif shutil.which("espeak-ng") or shutil.which("espeak"):
             cmd = [shutil.which("espeak-ng") or "espeak", "--stdin", "-w", path]
         else:
-            raise NoBuiltinVoice("no built-in voice on this system (install espeak-ng, or set FISH_AUDIO_API_KEY)")
+            raise NoBuiltinVoice("no built-in voice on this system (install espeak-ng, or check Kokoro / FISH_AUDIO_API_KEY)")
         subprocess.run(cmd, input=text.encode(), check=True, timeout=60)
         with open(path, "rb") as f:
             wav = f.read()
@@ -288,8 +358,8 @@ def _synthesize_builtin(text: str) -> bytes:
 
 def stream(text: str, leveler: Leveler | None = None) -> Iterator[bytes]:
     """Rocky's words as 16 kHz mono s16le PCM chunks, yielded as they're made.
-    Fish Audio when it's set up and reachable, else the computer's own voice
-    (all at once). Loudness is steadied by `leveler` (a fresh one if none is
+    Kokoro (config.TTS_BACKEND "kokoro") or Fish Audio when set up and
+    reachable, else the computer's own voice (all at once). Loudness is steadied by `leveler` (a fresh one if none is
     given). A saved copy goes to debug/tts/ when DEBUG_SAVE_TTS is on."""
     text = clean_for_tts(text)
     if not text:
@@ -300,13 +370,22 @@ def stream(text: str, leveler: Leveler | None = None) -> Iterator[bytes]:
     try:
         chunks: Iterator[bytes] | None = None
         first = b""
+        voices = []
+        if kokoro_available():
+            voices.append(("kokoro", _kokoro_stream))
         if fish_available():
+            voices.append(("fish audio", _fish_stream))
+        voice = ""
+        for voice, make in voices:
             try:
-                chunks = _fish_stream(text)
+                chunks = make(text)
                 first = next(chunks, b"")
-            except Exception as e:  # network, auth, bad voice id... still speak
-                print(f"(fish audio failed, using the built-in voice: {e})")
+                break
+            except Exception as e:  # network, auth, bad voice id... try the next one
+                print(f"({voice} failed: {e})")
                 chunks = None
+        if chunks is None and voices:
+            print("(using the built-in voice)")
         if chunks is None:
             try:
                 first = _synthesize_builtin(text)
@@ -324,7 +403,7 @@ def stream(text: str, leveler: Leveler | None = None) -> Iterator[bytes]:
                     parts.append(chunk)
                     yield chunk
             except Exception as e:  # dropped mid-stream: say what we have
-                print(f"(fish audio stream cut short: {e})")
+                print(f"({voice} stream cut short: {e})")
         complete = True
     finally:
         if complete and parts and config.DEBUG_SAVE_TTS:

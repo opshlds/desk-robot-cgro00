@@ -75,7 +75,16 @@ TTS_LEVEL = 0.12
 TTS_HIGHPASS_HZ = 0.0
 TTS_PRESENCE_DB = 0.0
 
-# Text-to-speech. The voice comes from Fish Audio (TTS_VOICE_ID above).
+# Text-to-speech backend, tried in this order until one works:
+#   "kokoro"   Kokoro on HAIL-E (OpenAI-style /v1/audio/speech). Local, on the GPU.
+#   "fish"     Fish Audio in the cloud (TTS_VOICE_ID above, FISH_AUDIO_API_KEY in .env).
+# Whatever is chosen, the computer's built-in voice is the last resort.
+TTS_BACKEND = "kokoro"
+KOKORO_URL = "http://localhost:8880/v1"   # Kokoro-FastAPI's default port
+KOKORO_VOICE = "am_michael"               # any Kokoro voice id; blends like "am_michael+am_onyx" also work
+KOKORO_SPEED = 1.0                        # 0.5..2.0
+
+# The voice comes from Fish Audio (TTS_VOICE_ID above) when TTS_BACKEND is "fish".
 TTS_FALLBACK_VOICE = "Fred"  # built-in voice used until Fish Audio is set up: a macOS `say`
                              # voice name (`say -v ?` lists them); Windows and Linux use their default
 # Loudness. Fish's level wanders from line to line, so the audio goes through
@@ -112,6 +121,14 @@ STT_MODEL = "base.en"    # faster-whisper model: base.en ~0.3 s per utterance on
 STT_REVISION = "3d3d5dee26484f91867d81cb899cfcf72b96be6c"
 STT_THREADS = 16          # CPU threads for transcription (0 = library default of 4)
 STT_PROMPT = f"Hey {ROBOT_NAME}. {ROBOT_NAME} is a robot."  # name hint for the model
+# Where the transcription itself runs. Speech detection and end-of-turn (below)
+# always stay in this process; only finished utterances are sent out.
+#   "speaches"  Speaches on HAIL-E (OpenAI-style /v1/audio/transcriptions), on the GPU.
+#               Falls back to the local model if Speaches can't be reached.
+#   "local"     faster-whisper in this process, on the CPU (STT_MODEL above).
+STT_BACKEND = "speaches"
+SPEACHES_URL = "http://localhost:8000/v1"
+SPEACHES_MODEL = "Systran/faster-whisper-base.en"  # any model id Speaches lists at /v1/models
 MIC_SOURCE = "robot"      # "robot" = the robot's mic, "mac" = MIC_DEVICE below,
                          # "auto" = robot when it's connected, else this computer
 MIC_DEVICE = os.environ.get("MIC_DEVICE") or None  # local input by name (set MIC_DEVICE in

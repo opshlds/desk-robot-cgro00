@@ -6,7 +6,7 @@ stream) or the robot's PDM mic, whose frames arrive over the WebSocket and
 are handed in through push_audio(). `source` picks which one is live.
 
 Pipeline:  mic blocks → Segmenter (Silero VAD + Smart Turn, see turn.py) →
-Transcriber (faster-whisper, local, no cloud) → on_utterance(text, ...)
+Transcriber (Speaches on HAIL-E, or faster-whisper locally) → on_utterance(text, ...)
 
 Where a turn ends is decided the way people do it, not by a fixed silence:
 a 0.2 s pause makes the Smart Turn model listen to the whole sentence and
@@ -191,19 +191,43 @@ class Segmenter:
 
 
 class Transcriber:
-    """Local speech-to-text. The first run downloads the model (~150 MB for
-    base.en) into ~/.cache; after that it's offline."""
+    """Speech-to-text for one finished utterance.
+
+    With config.STT_BACKEND "speaches" the audio goes to Speaches on HAIL-E
+    (OpenAI-style /v1/audio/transcriptions, on the GPU). If Speaches can't be
+    reached, this falls back to faster-whisper in this process for that
+    utterance and tries Speaches again next time. With "local" it is always
+    the in-process model. The local model loads on first use; its first run
+    downloads it (~150 MB for base.en) into ~/.cache."""
 
     def __init__(self, model_name: str = config.STT_MODEL) -> None:
-        from faster_whisper import WhisperModel  # slow import, keep it lazy
+        self.model_name = model_name
+        self._local = None
+        self._client = None
+        if config.STT_BACKEND == "speaches":
+            import openai
 
-        self.model = WhisperModel(
-            model_name, device="cpu", compute_type="int8", cpu_threads=config.STT_THREADS,
-            revision=config.STT_REVISION if model_name == config.STT_MODEL else None,
-        )
+            self._client = openai.OpenAI(base_url=config.SPEACHES_URL, api_key="speaches", timeout=15, max_retries=0)
+        else:
+            self._load_local()
+
+    def _load_local(self):
+        if self._local is None:
+            from faster_whisper import WhisperModel  # slow import, keep it lazy
+
+            self._local = WhisperModel(
+                self.model_name, device="cpu", compute_type="int8", cpu_threads=config.STT_THREADS,
+                revision=config.STT_REVISION if self.model_name == config.STT_MODEL else None,
+            )
+        return self._local
 
     def transcribe(self, audio: np.ndarray) -> str:
-        segments, _ = self.model.transcribe(
+        if self._client is not None:
+            try:
+                return self._transcribe_speaches(audio)
+            except Exception as e:  # Speaches down, model not loaded, timeout...
+                print(f"(speaches failed, transcribing locally: {e})")
+        segments, _ = self._load_local().transcribe(
             audio,
             language="en",
             beam_size=1,
@@ -213,6 +237,25 @@ class Transcriber:
             initial_prompt=config.STT_PROMPT,
         )
         return " ".join(s.text.strip() for s in segments).strip()
+
+    def _transcribe_speaches(self, audio: np.ndarray) -> str:
+        import io
+        import wave
+
+        wav = io.BytesIO()
+        with wave.open(wav, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(SAMPLE_RATE)
+            w.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
+        result = self._client.audio.transcriptions.create(
+            model=config.SPEACHES_MODEL,
+            file=("utterance.wav", wav.getvalue(), "audio/wav"),
+            language="en",
+            prompt=config.STT_PROMPT,  # same name hint as the local model gets
+            response_format="json",
+        )
+        return (result.text or "").strip()
 
 
 _WAKE_CLEAN = re.compile(r"[^a-z' ]+")
