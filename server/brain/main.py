@@ -155,6 +155,16 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
         await websocket.close(1008)
         return
     device = Device(websocket, roles, who=str(hello.get("who", "?")), fw=str(hello.get("fw", "?")), peer=peer)
+    stale = devices.same_board(device)
+    if stale:
+        # The same board reconnecting (it rebooted, or its WiFi blinked)
+        # while its old connection hasn't timed out yet: the new one wins.
+        for old in stale:
+            devices.remove(old.conn)
+            print(f"(replacing {old.who}'s old connection from {peer})")
+            if "speaker" in old.roles:
+                robot_speak_done.set()
+            asyncio.create_task(old.conn.close(1001))
     try:
         devices.add(device)
     except RoleTaken as e:
@@ -981,6 +991,28 @@ async def voice_loop() -> None:
             print(f"(voice loop error, ignoring that turn: {e})")
 
 
+def wants_sleep(text: str) -> bool:
+    norm = normalize(text)
+    return any(p in norm for p in config.SLEEP_PHRASES)
+
+
+async def goodnight() -> None:
+    """"Rocky, sleep": goodnight line, sleepy face, and only "hey Rocky"
+    wakes him. No brain call. He stays awake until the line has been heard
+    in full plus a short pause: going to sleep ends the voice board's
+    session, which would cut him off mid-word."""
+    global awake_until
+    lines = personality.LINES
+    print(f"{config.ROBOT_NAME} [sleepy]: {lines['sleep']}")
+    await send_to_robot({"type": "emotion", "name": "sleepy"})
+    awake_until = float("inf")  # hold off the doze check while he says goodnight
+    try:
+        await say(lines["sleep"])
+        await asyncio.sleep(config.SLEEP_DELAY_SECONDS)
+    finally:
+        await fall_asleep(told=True)
+
+
 async def _handle_heard(item: tuple[str, float, float, float]) -> None:
     global awake_until
     text, started_at, ended_at, heard_at = item
@@ -1007,19 +1039,8 @@ async def _handle_heard(item: tuple[str, float, float, float]) -> None:
         await send_to_robot({"type": "emotion", "name": "neutral"})
         await say(lines["track_off"])
         return
-    if any(p in norm for p in config.SLEEP_PHRASES):
-        # "Rocky, sleep": goodnight line, sleepy face, and only "hey Rocky"
-        # wakes him. No brain call. He stays awake until the line has been
-        # heard in full plus a short pause: going to sleep ends the voice
-        # board's session, which would cut him off mid-word.
-        print(f"{config.ROBOT_NAME} [sleepy]: {lines['sleep']}")
-        await send_to_robot({"type": "emotion", "name": "sleepy"})
-        awake_until = float("inf")  # hold off the doze check while he says goodnight
-        try:
-            await say(lines["sleep"])
-            await asyncio.sleep(config.SLEEP_DELAY_SECONDS)
-        finally:
-            await fall_asleep(told=True)
+    if wants_sleep(text):
+        await goodnight()
         return
     if woke:
         # Heard his name: eyes open, perk up to eye level (tilt can't go
@@ -1047,6 +1068,10 @@ async def _handle_heard(item: tuple[str, float, float, float]) -> None:
         text, started_at, ended_at, heard_at = item
         _, more = strip_wake_word(text)
         print(f"{config.HUMAN_NAME}: {text}")
+        if wants_sleep(more):
+            # "...go to sleep" after an interrupted question: that wins.
+            await goodnight()
+            return
         question = f"{question} {more}".strip()
         eyes.last_heard = question
         awake_until = time.time() + config.AWAKE_SECONDS

@@ -163,6 +163,10 @@ SLEEP_PHRASES = [        # any of these puts him to sleep until the next "hey <n
     "goodnight",
     "good night",
     "stop listening",
+    "fall asleep",
+    "go to bed",
+    "time to sleep",
+    "time for bed",
 ]
 # What he says as he goes to sleep: personality.py, LINES.
 SLEEP_DELAY_SECONDS = 1.5  # after his goodnight line has played, wait this long before he

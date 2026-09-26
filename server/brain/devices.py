@@ -88,6 +88,15 @@ class Registry:
             raise RoleTaken(f"role already taken: {taken}")
         self._devices[device.conn] = device
 
+    def same_board(self, device: Device) -> list[Device]:
+        """Connections holding this device's roles that look like an older
+        connection of the same board: same name, same address. Empty when
+        any clashing connection is a different board (that one keeps its role)."""
+        clashing = [d for d in self._devices.values() if device.roles & d.roles]
+        if clashing and all(d.who == device.who and d.peer == device.peer for d in clashing):
+            return clashing
+        return []
+
     def remove(self, conn: Any) -> Device | None:
         return self._devices.pop(conn, None)
 

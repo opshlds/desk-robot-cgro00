@@ -83,6 +83,34 @@ class FaceBoard(unittest.IsolatedAsyncioTestCase):
             await recv_json(self.face, timeout=0.3)
         await cam.close()
 
+    async def test_a_reconnecting_face_replaces_its_old_connection(self):
+        await recv_json(self.face)
+        again = await connect(f"ws://127.0.0.1:{PORT}")   # same board, old socket not yet dead
+        await again.send(json.dumps({"type": "hello", "who": "amoled-face", "fw": "0.2.1",
+                                     "token": os.environ["ROBOT_TOKEN"], "roles": ["face"]}))
+        self.assertEqual(await recv_json(again), {"type": "emotion", "name": "neutral"})
+        with self.assertRaises(websockets.ConnectionClosed):
+            await asyncio.wait_for(self.face.recv(), 3)      # the old one is closed
+        self.assertEqual(brainmain.devices.owner("face").fw, "0.2.1")
+        await again.close()
+
+    async def test_a_different_board_still_cannot_take_the_face(self):
+        await recv_json(self.face)
+        other = await connect(f"ws://127.0.0.1:{PORT}")
+        await other.send(json.dumps({"type": "hello", "who": "another-screen",
+                                     "token": os.environ["ROBOT_TOKEN"], "roles": ["face"]}))
+        with self.assertRaises(websockets.ConnectionClosed) as cm:
+            await asyncio.wait_for(other.recv(), 3)
+        self.assertEqual(cm.exception.rcvd.code, 1013)
+
+
+class SleepWords(unittest.TestCase):
+    def test_sleep_phrases(self):
+        for said in ["Go to sleep.", "Rocky, go to sleep", "Time for bed!", "You can fall asleep now"]:
+            self.assertTrue(brainmain.wants_sleep(said), said)
+        for said in ["Are you asleep?", "What time is it?", "Sleep is important, right?"]:
+            self.assertFalse(brainmain.wants_sleep(said), said)
+
 
 if __name__ == "__main__":
     unittest.main()
