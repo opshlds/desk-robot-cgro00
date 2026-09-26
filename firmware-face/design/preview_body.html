@@ -1,0 +1,225 @@
+<title>HAIL-E Face Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  color-scheme: dark;
+  --ground:#0f1216; --panel:#161a20; --panel2:#1c212a; --line:#29303b;
+  --text:#dfe4ec; --muted:#8c96a6; --faint:#5d6674;
+  --accent:#45E3D2; --on-accent:#06130f;
+  --display:"Chakra Petch", "Segoe UI", system-ui, sans-serif;
+  --body:"IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+*{box-sizing:border-box}
+html,body{background:var(--ground)}
+body{color:var(--text);font:14px/1.5 var(--body);padding-inline:16px;padding-block:20px 40px}
+.wrap{max-width:1120px;margin:0 auto;display:grid;gap:20px}
+header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px 20px}
+h1{font:600 26px/1.1 var(--display);letter-spacing:.02em;margin:0;text-wrap:balance}
+h1 span{color:var(--accent);transition:color .3s}
+.sub{color:var(--muted);margin:0;max-width:62ch}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:860px){.grid{grid-template-columns:minmax(0,1fr)}}
+.stage{display:grid;justify-items:center;gap:12px;padding:20px 12px;background:radial-gradient(circle at 50% 42%,#1a1f27 0,#0f1216 70%);border:1px solid var(--line);border-radius:14px}
+.bezel{width:min(100%,500px);aspect-ratio:1;max-width:100%;border-radius:50%;padding:3.2%;background:linear-gradient(145deg,#2b313b,#101318 60%);box-shadow:0 0 0 1px #333a46,0 18px 40px #0008}
+canvas{display:block;width:100%;height:100%;border-radius:50%;background:#000;touch-action:none;cursor:pointer}
+.readout{font:12px/1.4 var(--mono);color:var(--muted);display:flex;flex-wrap:wrap;gap:6px 16px;justify-content:center;font-variant-numeric:tabular-nums}
+.readout b{color:var(--text);font-weight:500}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;display:grid;gap:16px}
+.group{display:grid;gap:8px}
+.label{font:500 11px/1 var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--faint)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+button{font:500 13px/1 var(--body);color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:8px 13px;cursor:pointer}
+button:hover{border-color:var(--faint)}
+button:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.chip i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:0}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.sliders{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 16px}
+@media (max-width:460px){.sliders{grid-template-columns:minmax(0,1fr)}}
+.sl{display:grid;grid-template-columns:62px minmax(0,1fr) 44px;align-items:center;gap:8px;font:12px var(--mono);color:var(--muted)}
+.sl output{color:var(--text);text-align:right;font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--accent)}
+input[type=color]{width:40px;height:26px;border:1px solid var(--line);border-radius:6px;background:none;padding:0}
+select{font:13px var(--body);background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:5px 8px}
+.log{font:12px/1.55 var(--mono);background:#0b0e12;border:1px solid var(--line);border-radius:10px;padding:10px 12px;height:150px;overflow:auto;color:var(--muted);white-space:pre-wrap;word-break:break-word}
+.log .cmd{color:var(--text)} .log .brain{color:var(--accent)}
+details{border-top:1px solid var(--line);padding-top:12px}
+summary{cursor:pointer;color:var(--muted);font:500 12px var(--mono);text-transform:uppercase;letter-spacing:.08em}
+textarea{width:100%;height:220px;margin-top:10px;font:12px/1.45 var(--mono);color:var(--text);background:#0b0e12;border:1px solid var(--line);border-radius:10px;padding:10px}
+.note{color:var(--muted);font-size:13px;margin:0;max-width:65ch}
+.note code{font-family:var(--mono);font-size:12px;color:var(--text)}
+.status{font:12px var(--mono);color:var(--accent);min-height:1.2em}
+@media (prefers-reduced-motion:reduce){h1 span{transition:none}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>HAIL-E <span>Face Lab</span></h1>
+    <p class="sub">The round AMOLED face, drawn by the same rules the firmware uses. Tap the screen to wake him, hold it to put him to sleep.</p>
+  </header>
+
+  <div class="grid">
+    <section class="stage" aria-label="Face preview">
+      <div class="bezel"><canvas id="scr" width="466" height="466" aria-label="Simulated 466 by 466 AMOLED face"></canvas></div>
+      <div class="readout">
+        <span>emotion <b id="r-emo">neutral</b></span>
+        <span>state <b id="r-state">awake</b></span>
+        <span>brightness <b id="r-bright">190</b>/255</span>
+        <span>draws <b id="r-prims">0</b></span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="group">
+        <div class="label">Emotion · what the brain sends</div>
+        <div class="chips" id="emos"></div>
+      </div>
+      <div class="group">
+        <div class="label">State</div>
+        <div class="row">
+          <button id="b-sleep" aria-pressed="false">Asleep</button>
+          <button id="b-talk" aria-pressed="false">Talking</button>
+          <button id="b-idle" aria-pressed="true">Idle glances</button>
+          <button id="b-blink">Blink</button>
+          <button id="b-demo">Play “Computer, what time is it?”</button>
+        </div>
+      </div>
+      <div class="group">
+        <div class="label">Serial console / brain messages</div>
+        <div class="log" id="log" role="log" aria-live="polite"></div>
+      </div>
+
+      <details id="tune">
+        <summary>Tune the <span id="t-name">neutral</span> expression</summary>
+        <div class="group" style="margin-top:12px">
+          <div class="row"><span class="label">Colour</span><input type="color" id="t-color"><span class="label" style="margin-left:10px">Ring</span>
+            <select id="t-ring"><option>off</option><option>pulse</option><option>flash</option><option>spin</option></select></div>
+          <div class="sliders" id="sliders"></div>
+          <div class="row">
+            <button id="b-copy">Copy all parameters</button>
+            <button id="b-reset">Reset to v1</button>
+            <span class="status" id="copy-status"></span>
+          </div>
+          <textarea id="json" spellcheck="false" aria-label="Face parameters JSON"></textarea>
+          <div class="row"><button id="b-apply">Apply JSON</button></div>
+          <p class="note">This JSON is <code>firmware-face/design/face_params.json</code>. Paste your tuned copy back into the chat, or save it over that file and run <code>python tools/gen_params.py</code> before building.</p>
+        </div>
+      </details>
+    </section>
+  </div>
+</div>
+
+<script>
+/*ENGINE*/
+</script>
+<script>
+const V1 = /*PARAMS*/;
+let params = JSON.parse(JSON.stringify(V1));
+const face = new HaileFace.Face(params);
+const cv = document.getElementById('scr'), ctx = cv.getContext('2d');
+const $ = id => document.getElementById(id);
+const logEl = $('log');
+function log(text, cls){ const d=document.createElement('div'); if(cls) d.className=cls; d.textContent=text; logEl.appendChild(d); while(logEl.childNodes.length>60) logEl.firstChild.remove(); logEl.scrollTop=logEl.scrollHeight; }
+
+// ---- emotion chips
+const emoNames = Object.keys(params.emotions);
+const chipBox = $('emos');
+emoNames.forEach(n=>{ const b=document.createElement('button'); b.className='chip'; b.dataset.emo=n; b.innerHTML='<i></i>'+n; b.onclick=()=>emo(n,true); chipBox.appendChild(b); });
+function paintChips(){ chipBox.querySelectorAll('button').forEach(b=>{ b.setAttribute('aria-pressed', b.dataset.emo===face.emotion); b.querySelector('i').style.background=params.emotions[b.dataset.emo].color; }); }
+function emo(n, fromUser){ face.setEmotion(n); if(fromUser) log('> emo '+n,'cmd'); paintChips(); loadTuner(); document.documentElement.style.setProperty('--accent', params.emotions[n].color); }
+
+// ---- state buttons
+function setSleep(on, src){ face.setAsleep(on); $('b-sleep').setAttribute('aria-pressed',on); log(src||('> sleep '+(on?'on':'off')), src?'brain':'cmd'); }
+function setTalk(on){ face.setTalking(on); $('b-talk').setAttribute('aria-pressed',on); }
+$('b-sleep').onclick=()=>setSleep(!face.asleep);
+$('b-talk').onclick=()=>{ setTalk(!face.talking); log('> talk '+(face.talking?'on':'off')+'   (synthetic voice level)','cmd'); };
+$('b-idle').onclick=()=>{ face.idle=!face.idle; $('b-idle').setAttribute('aria-pressed',face.idle); };
+$('b-blink').onclick=()=>{ face.doBlink(); log('> blink','cmd'); };
+
+// ---- synthetic voice level: syllables ~5/s with word gaps
+let talkT=0;
+function voiceLevel(dt){ talkT+=dt/1000; const syl=Math.max(0,Math.sin(talkT*Math.PI*2*4.6)); const word=Math.sin(talkT*Math.PI*2*0.9)>-0.55?1:0; return Math.min(1,(0.35+0.65*syl)*word*(0.75+0.25*Math.sin(talkT*13.7))); }
+
+// ---- demo: the Part 3 "done when" sequence
+let timers=[];
+function demo(){
+  timers.forEach(clearTimeout); timers=[];
+  const at=(ms,fn)=>timers.push(setTimeout(fn,ms));
+  setSleep(true); setTalk(false); emo('sleepy');
+  log('— demo: "Computer, what time is it?" —','cmd');
+  at(900, ()=>{ setSleep(false,'← {"type":"asleep","on":false}'); emo('surprised'); log('← {"type":"emotion","name":"surprised"}','brain'); });
+  at(2300,()=>{ emo('thinking'); log('← {"type":"emotion","name":"thinking"}','brain'); });
+  at(3700,()=>{ emo('happy'); log('← {"type":"emotion","name":"happy"}  + mouth levels','brain'); setTalk(true); });
+  at(6600,()=>{ setTalk(false); emo('neutral'); log('← {"type":"emotion","name":"neutral"}','brain'); });
+  at(8200,()=>{ log('— "Rocky, go to sleep." —','cmd'); emo('sleepy'); log('← {"type":"emotion","name":"sleepy"}','brain'); setTalk(true); });
+  at(9800,()=>{ setTalk(false); });
+  at(11300,()=>{ setSleep(true,'← {"type":"asleep","on":true}'); });
+}
+$('b-demo').onclick=demo;
+
+// ---- touch simulation (tap wakes, long press sleeps, swipes reserved)
+let down=null;
+cv.addEventListener('pointerdown',e=>{ down={x:e.clientX,y:e.clientY,t:performance.now()}; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointerup',e=>{
+  if(!down) return; const dx=e.clientX-down.x, dt=performance.now()-down.t; down=null;
+  let g = Math.abs(dx)>50 ? (dx<0?'swipe_l':'swipe_r') : dt>600 ? 'long' : 'tap';
+  log('→ {"type":"touch","gesture":"'+g+'"}','brain');
+  if(g==='tap' && face.asleep){ setSleep(false,'← {"type":"asleep","on":false}'); emo('surprised'); timers.push(setTimeout(()=>emo('neutral'),1400)); }
+  else if(g==='tap'){ face.doBlink(); }
+  else if(g==='long' && !face.asleep){ emo('sleepy'); timers.push(setTimeout(()=>setSleep(true,'← {"type":"asleep","on":true}'),1500)); }
+});
+cv.addEventListener('pointermove',e=>{ if(down) return; const r=cv.getBoundingClientRect(); face.lookAt(((e.clientX-r.left)/r.width-0.5)*2.2, ((e.clientY-r.top)/r.height-0.5)*2.2); });
+
+// ---- tuner
+const RANGES={eyeW:[60,160,1],eyeH:[60,200,1],radius:[4,90,1],gap:[60,120,1],dy:[-40,40,1],lid:[0,0.8,0.01],slant:[-50,50,1],asym:[0,0.4,0.01],lower:[0,0.7,0.01],mouthW:[20,160,1],curve:[-50,50,1],open:[0,1,0.01],mouthDx:[-60,60,1],gazeX:[-20,20,1],gazeY:[-13,13,1]};
+const sliderBox=$('sliders');
+Object.entries(RANGES).forEach(([k,[lo,hi,st]])=>{
+  const id='s-'+k, row=document.createElement('label'); row.className='sl'; row.htmlFor=id;
+  row.innerHTML=`<span>${k}</span><input type="range" id="${id}" min="${lo}" max="${hi}" step="${st}"><output id="o-${k}"></output>`;
+  sliderBox.appendChild(row);
+  row.querySelector('input').addEventListener('input',ev=>{ const v=+ev.target.value; params.emotions[face.emotion][k]=v; $('o-'+k).textContent=v; face.setParams(params); syncJSON(); });
+});
+$('t-color').addEventListener('input',e=>{ params.emotions[face.emotion].color=e.target.value.toUpperCase(); face.setParams(params); paintChips(); document.documentElement.style.setProperty('--accent',e.target.value); syncJSON(); });
+$('t-ring').addEventListener('change',e=>{ params.emotions[face.emotion].ring=e.target.value; face.setParams(params); syncJSON(); });
+function loadTuner(){ const e=params.emotions[face.emotion]; $('t-name').textContent=face.emotion; for(const k in RANGES){ $('s-'+k).value=e[k]; $('o-'+k).textContent=e[k]; } $('t-color').value=e.color; $('t-ring').value=e.ring; }
+function syncJSON(){ $('json').value=JSON.stringify(params,null,1); try{localStorage.setItem('haile-face-params',$('json').value);}catch(_){} }
+$('b-apply').onclick=()=>{ try{ const p=JSON.parse($('json').value); params=p; face.setParams(p); paintChips(); loadTuner(); $('copy-status').textContent='Applied'; }catch(err){ $('copy-status').textContent='Not valid JSON: '+err.message; } };
+$('b-reset').onclick=()=>{ params=JSON.parse(JSON.stringify(V1)); face.setParams(params); paintChips(); loadTuner(); syncJSON(); $('copy-status').textContent='Back to v1'; };
+$('b-copy').onclick=()=>{ const t=$('json').value; navigator.clipboard.writeText(t).then(()=>$('copy-status').textContent='Copied',()=>{ $('json').select(); $('copy-status').textContent='Selected: press Ctrl+C'; }); };
+try{ const saved=localStorage.getItem('haile-face-params'); if(saved){ params=JSON.parse(saved); face.setParams(params);} }catch(_){}
+
+// ---- renderer (mirrors the LVGL draw calls)
+function rgba(c,o){ return `rgba(${c[0]},${c[1]},${c[2]},${Math.max(0,Math.min(1,o))})`; }
+function draw(prims, bright){
+  ctx.setTransform(1,0,0,1,0,0); ctx.globalAlpha=1; ctx.fillStyle='#000'; ctx.fillRect(0,0,466,466);
+  for(const p of prims){
+    ctx.fillStyle=rgba(p.c,p.o); ctx.strokeStyle=ctx.fillStyle;
+    if(p.k==='rrect'){ ctx.beginPath(); ctx.roundRect(p.x,p.y,p.w,p.h,p.r); ctx.fill(); }
+    else if(p.k==='quad'){ const q=p.p; ctx.beginPath(); ctx.moveTo(q[0],q[1]); ctx.lineTo(q[2],q[3]); ctx.lineTo(q[4],q[5]); ctx.lineTo(q[6],q[7]); ctx.closePath(); ctx.fill(); }
+    else if(p.k==='circle'){ ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill(); }
+    else if(p.k==='arc'){ ctx.lineWidth=p.w; ctx.lineCap=(p.a1-p.a0)>=360?'butt':'round'; ctx.beginPath(); ctx.arc(p.x,p.y,p.r-p.w/2,p.a0*Math.PI/180,p.a1*Math.PI/180); ctx.stroke(); }
+    else if(p.k==='text'){ ctx.font=`600 ${p.size}px "Chakra Petch", sans-serif`; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(p.s,p.x,p.y); }
+  }
+  // Panel brightness relative to the awake level.
+  const b=Math.min(1,bright/params.layout.brightAwake);
+  if(b<1){ ctx.fillStyle=`rgba(0,0,0,${1-b})`; ctx.fillRect(0,0,466,466); }
+}
+let last=performance.now(), t0=last;
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+function frame(now){
+  const dt=Math.min(50,now-last); last=now;
+  if(face.talking) face.setLevel(voiceLevel(dt));
+  face.step(dt, now-t0);
+  const prims=face.render();
+  draw(prims, face.bright);
+  $('r-emo').textContent=face.emotion; $('r-state').textContent=face.asleep?'asleep':(face.talking?'talking':'awake');
+  $('r-bright').textContent=face.bright; $('r-prims').textContent=prims.length;
+  requestAnimationFrame(frame);
+}
+if(reduce) face.idle=false, $('b-idle').setAttribute('aria-pressed',false);
+emo('neutral'); syncJSON(); log('face-fw 0.1.0 (preview)  type "help" on the real board');
+requestAnimationFrame(frame);
+</script>

@@ -1,0 +1,20 @@
+{
+  "_about": "HAIL-E face v1. Single source for the preview page and firmware-face/include/face_params.h (tools/gen_params.py). Units: pixels on the 466x466 round screen, origin top-left, centre 233,233.",
+  "layout": {
+    "cx": 233, "eyeY": 200, "mouthY": 334,
+    "ringR": 222, "ringW": 7,
+    "talkOpenH": 58, "mouthThick": 11,
+    "gazeMaxX": 20, "gazeMaxY": 13,
+    "morphMs": 90, "colorMs": 220,
+    "brightAwake": 190, "brightAsleep": 45
+  },
+  "emotions": {
+    "neutral":   {"eyeW":108,"eyeH":150,"radius":50,"gap":88,"dy":0,  "lid":0.00,"slant":0,  "asym":0.00,"lower":0.00,"mouthW":72, "curve":8,  "open":0.00,"mouthDx":0, "gazeX":0,   "gazeY":0,   "color":"#45E3D2","ring":"off"},
+    "happy":     {"eyeW":118,"eyeH":132,"radius":58,"gap":90,"dy":-4, "lid":0.00,"slant":0,  "asym":0.00,"lower":0.42,"mouthW":112,"curve":30, "open":0.18,"mouthDx":0, "gazeX":0,   "gazeY":-4,  "color":"#FFC54D","ring":"pulse"},
+    "sad":       {"eyeW":102,"eyeH":132,"radius":46,"gap":84,"dy":14, "lid":0.14,"slant":-26,"asym":0.00,"lower":0.00,"mouthW":84, "curve":-22,"open":0.00,"mouthDx":0, "gazeX":0,   "gazeY":8,   "color":"#5E8BFF","ring":"off"},
+    "angry":     {"eyeW":114,"eyeH":122,"radius":34,"gap":86,"dy":6,  "lid":0.22,"slant":30, "asym":0.00,"lower":0.00,"mouthW":80, "curve":-12,"open":0.00,"mouthDx":0, "gazeX":0,   "gazeY":0,   "color":"#FF5A4A","ring":"off"},
+    "surprised": {"eyeW":124,"eyeH":172,"radius":62,"gap":92,"dy":-8, "lid":0.00,"slant":0,  "asym":0.00,"lower":0.00,"mouthW":46, "curve":0,  "open":0.85,"mouthDx":0, "gazeX":0,   "gazeY":-6,  "color":"#E6FCFF","ring":"flash"},
+    "sleepy":    {"eyeW":112,"eyeH":146,"radius":50,"gap":88,"dy":8,  "lid":0.60,"slant":-8, "asym":0.00,"lower":0.00,"mouthW":52, "curve":2,  "open":0.00,"mouthDx":0, "gazeX":0,   "gazeY":6,   "color":"#7FA6C9","ring":"off"},
+    "thinking":  {"eyeW":104,"eyeH":140,"radius":46,"gap":86,"dy":-2, "lid":0.16,"slant":8,  "asym":0.14,"lower":0.00,"mouthW":50, "curve":-4, "open":0.00,"mouthDx":28,"gazeX":16,  "gazeY":-11, "color":"#B28CFF","ring":"spin"}
+  }
+}
