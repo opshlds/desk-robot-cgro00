@@ -25,7 +25,7 @@ it concerns (`server/brain/devices.py`, ROUTES):
 
 and only accepts board messages from the matching role: mic audio from the
 mic, camera frames from the camera, `speak_done` and `abort` from the
-speaker, `wake` from the mic.
+speaker, `wake` from the mic, `touch` from the face.
 
 HAIL-E's layout: the Yahboom voice board (through `server/bridge/`, which
 translates the Xiaozhi protocol) = `mic` + `speaker`; the XIAO = `camera`
@@ -43,6 +43,7 @@ The rest of the frame is the payload.
 {"type": "state", "pan": 12.5, "emotion": "neutral"}
 {"type": "temp", "c": 52.0}       // chip temperature, sent every ~10 s
 {"type": "speak_done"}            // finished playing the last reply
+{"type": "touch", "gesture": "tap"}   // face: tap | long | swipe_l | swipe_r. Tap wakes him, long press = sleep
 ```
 
 Binary `0x01` frames: microphone audio, 16 kHz mono signed 16-bit PCM,

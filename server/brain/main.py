@@ -206,6 +206,10 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
                 # the chip), so the audio that follows won't contain "hey Rocky".
                 asyncio.create_task(board_woke(str(event.get("word", ""))))
                 continue
+            if kind == "touch" and "face" in roles:
+                # The face screen was touched: tap wakes him, long press = sleep.
+                asyncio.create_task(face_touched(str(event.get("gesture", ""))))
+                continue
             if kind == "abort" and "speaker" in roles:
                 # The human interrupted (wake word while Rocky was talking).
                 stop_speaking("interrupted by the wake word")
@@ -230,6 +234,26 @@ async def board_woke(word: str) -> None:
     print(f"(woken by the board's wake word{': ' + word if word else ''} — listening)")
     await send_to_robot({"type": "asleep", "on": False})
     await send_to_robot({"type": "emotion", "name": "surprised"})
+
+
+async def face_touched(gesture: str) -> None:
+    """Touches on the face screen. Tap: wake up (eyes open, surprised) and
+    stay awake for the usual follow-up window. The Yahboom still needs its
+    wake word before it listens: its session only opens on "Computer".
+    Long press: goodnight without words (cuts a reply that is playing).
+    Swipes are kept for switching characters later."""
+    global awake_until
+    print(f"(face touched: {gesture})")
+    if gesture == "tap":
+        if time.time() >= awake_until:
+            awake_until = time.time() + config.AWAKE_SECONDS
+            await send_to_robot({"type": "asleep", "on": False})
+            await send_to_robot({"type": "emotion", "name": "surprised"})
+    elif gesture == "long":
+        stop_speaking("put to sleep from the face screen")
+        await send_to_robot({"type": "emotion", "name": "sleepy"})
+        await asyncio.sleep(config.SLEEP_DELAY_SECONDS)
+        await fall_asleep(told=True)
 
 
 def stop_speaking(why: str) -> None:
