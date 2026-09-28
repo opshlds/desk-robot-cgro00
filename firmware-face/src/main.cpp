@@ -239,7 +239,7 @@ void readConsole() {
       buf = "";
     } else if (ch == 8 || ch == 127) {           // backspace
       if (buf.length()) buf.remove(buf.length() - 1);
-    } else if (buf.length() < 80) {
+    } else if (buf.length() < 240) {             // room for long tokens / passwords
       buf += ch;
     }
   }

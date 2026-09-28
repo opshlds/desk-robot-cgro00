@@ -77,6 +77,12 @@ void onEvent(WStype_t type, uint8_t* payload, size_t length) {
   }
 }
 
+// Shows enough of the token to compare with the brain's, without printing it.
+String fingerprint(const String& t) {
+  if (t.isEmpty()) return "NOT SET";
+  return String(t.length()) + " chars, starts \"" + t.substring(0, 4) + "\", ends \"" + t.substring(t.length() > 4 ? t.length() - 4 : 0) + "\"";
+}
+
 void start() {
   if (started || ssid.isEmpty()) return;
   WiFi.mode(WIFI_STA);
@@ -129,8 +135,8 @@ void send(const String& json) {
 void status() {
   Serial.printf("wifi \"%s\" %s", ssid.c_str(), wifiUp() ? "up" : (ssid.isEmpty() ? "not set" : "down"));
   if (wifiUp()) Serial.printf(" (%s, %d dBm)", WiFi.localIP().toString().c_str(), WiFi.RSSI());
-  Serial.printf("  brain ws://%s:%u %s  token %s\r\n", host.c_str(), port, isConnected ? "connected" : "not connected",
-                token.isEmpty() ? "NOT SET" : "set");
+  Serial.printf("  brain ws://%s:%u %s\r\n  token %s\r\n", host.c_str(), port, isConnected ? "connected" : "not connected",
+                fingerprint(token).c_str());
 }
 
 void setWifi(const String& s, const String& p) {
@@ -141,10 +147,16 @@ void setWifi(const String& s, const String& p) {
   ESP.restart();
 }
 
-void setToken(const String& t) {
+void setToken(const String& raw) {
+  // Accept a pasted .env line too: ROBOT_TOKEN=abc, quotes, stray spaces.
+  String t = raw;
+  t.trim();
+  if (t.startsWith("ROBOT_TOKEN=")) t = t.substring(12);
+  t.trim();
+  if (t.length() >= 2 && (t[0] == '"' || t[0] == '\'') && t[t.length() - 1] == t[0]) t = t.substring(1, t.length() - 1);
   save("token", t);
   token = t;
-  Serial.println("token saved");
+  Serial.printf("token saved (%s)\r\n", fingerprint(t).c_str());
   if (isConnected) ws.disconnect();   // reconnect with the new hello
 }
 

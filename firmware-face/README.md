@@ -6,8 +6,9 @@ Firmware for the **Waveshare ESP32-S3-Touch-AMOLED-1.43** (466x466 AMOLED, FT316
 |---|---|
 | M0 check screen (driver chip, colours, touch, COM port, MAC) | in this build (first 3 s after boot, or `test on`) |
 | M1 standalone face, console control | done (0.1.1, verified on the board: CO5300 panel, ~45 fps) |
-| M2 WiFi + brain link (role `face`), touches to the brain | **this build (0.2.0)** |
-| M3 mouth sync (`mouth` levels from the brain) | firmware ready (0.2.0 obeys `mouth`); brain side next |
+| M2 WiFi + brain link (role `face`), touches to the brain | done (0.2.0) |
+| M3 mouth sync (`mouth` levels from the brain) | done (0.2.0 obeys `mouth`; brain side in patch 0010) |
+| 0.2.1 console fixes: token fingerprint, pasted `ROBOT_TOKEN=` lines, 240-char lines | **this build (0.2.1)** |
 | M4 gaze, burn-in care | later |
 
 ## Layout
@@ -28,12 +29,13 @@ src/main.cpp              boot, loop, serial console
 Face Lab and the firmware run the same engine. A host-side test compares their draw lists frame by frame and they match. So a face tuned in Face Lab looks the same on the board.
 
 ## Quickest: flash the prebuilt image with esptool
-`bin/face-fw-0.2.0-factory.bin` is a complete image (bootloader, partitions and app), built from this source. esptool is already on the PC.
+`bin/face-fw-0.2.1-factory.bin` is a complete image (bootloader, partitions and app), built from this source. esptool is already on the PC.
 
 ```
 esptool --port COMx read-flash 0 ALL waveshare-amoled-factory.bin     (one-time backup, 16 MB)
-esptool --port COMx write-flash 0x0 bin\face-fw-0.2.0-factory.bin
+esptool --port COMx write-flash 0x0 bin\face-fw-0.2.1-factory.bin
 ```
+The factory image blanks the saved settings (token, WiFi, brain). On a board that is already set up, write only the app instead and the settings survive: `esptool --port COMx write-flash 0x10000 bin\face-fw-<version>-app.bin`.
 To restore the backup: `esptool --port COMx write-flash 0x0 waveshare-amoled-factory.bin`.
 
 ## Build and flash from source (Windows PC)
@@ -76,12 +78,12 @@ Things to report back:
 ## M2: on WiFi with the brain
 Set these once in the console. They're saved on the board, not in the source.
 ```
-token <ROBOT_TOKEN>            the value in ~/desk-robot/server/.env on ai1
+token <ROBOT_TOKEN>            the value in ~/desk-robot/server/.env on ai1 (a pasted ROBOT_TOKEN=... line works too)
 wifi IOTNSFW <password>        saves and reboots (the SSID may contain spaces; the password is the last word)
 brain 192.168.1.99 8765        only if the brain moves (this is the default)
 net                            WiFi + brain status
 ```
-Once it's connected, the brain console's `status` lists `amoled-face (fw 0.2.0) [face]`. From then on the brain drives the face: emotions, sleep, and mouth levels (M3). Touches go to the brain (needs patch 0008). Tap wakes him (the Yahboom still needs "Computer" before it listens). Long press puts him to sleep. When the brain isn't connected, the board handles touches itself.
+Once it's connected, the brain console's `status` lists `amoled-face (fw 0.2.1) [face]`. From then on the brain drives the face: emotions, sleep, and mouth levels (M3). Touches go to the brain (needs patch 0008). Tap wakes him (the Yahboom still needs "Computer" before it listens). Long press puts him to sleep. When the brain isn't connected, the board handles touches itself.
 
 ## Changing the face
 1. Tune in Face Lab (the published page, or `design/face_lab.html`), then **Copy all parameters**.
