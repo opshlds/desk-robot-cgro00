@@ -22,7 +22,23 @@ uint32_t nextTempMs = 0, nextStatsMs = 0;
 uint32_t statsFrames0 = 0, statsSent0 = 0, statsAt = 0;
 float wantedFps = 10.0f;
 uint8_t* jpg = nullptr;
-const size_t JPG_CAP = 64 * 1024;
+const size_t JPG_CAP = Camera::MAX_JPEG;
+
+struct Res { const char* name; framesize_t size; int w, h; };
+const Res RESOLUTIONS[] = {
+    {"qvga", FRAMESIZE_QVGA, 320, 240},
+    {"vga", FRAMESIZE_VGA, 640, 480},
+    {"svga", FRAMESIZE_SVGA, 800, 600},
+    {"hd", FRAMESIZE_HD, 1280, 720},
+};
+const Res* findRes(framesize_t size) {
+  for (const Res& r : RESOLUTIONS) if (r.size == size) return &r;
+  return &RESOLUTIONS[2];
+}
+const Res* findRes(const String& name) {
+  for (const Res& r : RESOLUTIONS) if (name.equalsIgnoreCase(r.name)) return &r;
+  return nullptr;
+}
 
 void saveFlip() {
   Preferences p;
@@ -32,11 +48,22 @@ void saveFlip() {
   p.end();
 }
 
+framesize_t savedRes = FRAMESIZE_SVGA;   // default: 800x600
+
 void loadFlip() {
   Preferences p;
   p.begin("cam", true);
   vflip = p.getBool("vflip", false);
   hmirror = p.getBool("hmirror", false);
+  savedRes = (framesize_t)p.getUChar("res", (uint8_t)FRAMESIZE_SVGA);
+  p.end();
+  if (savedRes > FRAMESIZE_HD) savedRes = FRAMESIZE_SVGA;
+}
+
+void saveRes(framesize_t size) {
+  Preferences p;
+  p.begin("cam", false);
+  p.putUChar("res", (uint8_t)size);
   p.end();
 }
 
@@ -61,6 +88,7 @@ void help() {
       "HAIL-E camera commands:\r\n"
       "  stream on|off [fps]   send frames to the brain (it turns this on itself)\r\n"
       "  snap                  grab one frame and report its size\r\n"
+      "  res qvga|vga|svga|hd  picture size: 320x240, 640x480, 800x600, 1280x720 (saved)\r\n"
       "  flip none|v|h|both    rotate/mirror the picture (saved)\r\n"
       "  stats on|off          frames captured/sent per second, every 5 s\r\n"
       "  info   temp   reboot   help\r\n"
@@ -68,8 +96,10 @@ void help() {
 }
 
 void info() {
-  Serial.printf("cam-fw %s  sensor %s  flip %s%s  stream %s @ %.1f fps\r\n", CAM_FW_VERSION, camera.sensorName(),
-                vflip ? "v" : "", hmirror ? "h" : (vflip ? "" : "none"), camera.streaming() ? "on" : "off", camera.fps());
+  const Res* r = findRes(camera.frameSize());
+  Serial.printf("cam-fw %s  sensor %s  %s %dx%d  flip %s%s  stream %s @ %.1f fps\r\n", CAM_FW_VERSION, camera.sensorName(),
+                r->name, r->w, r->h, vflip ? "v" : "", hmirror ? "h" : (vflip ? "" : "none"),
+                camera.streaming() ? "on" : "off", camera.fps());
   Serial.printf("MAC %s  heap %lu KB  psram %lu/%lu KB  chip %.1f C\r\n", WiFi.macAddress().c_str(),
                 (unsigned long)(ESP.getFreeHeap() / 1024), (unsigned long)(ESP.getFreePsram() / 1024),
                 (unsigned long)(ESP.getPsramSize() / 1024), temperatureRead());
@@ -111,6 +141,19 @@ void command(String line) {
     camera.setStreaming(onoff == "on", fps);
     Serial.printf("stream %s @ %.1f fps%s\r\n", camera.streaming() ? "on" : "off", camera.fps(),
                   brainlink::connected() ? "" : " (not connected: nothing is sent)");
+  } else if (cmd == "res") {
+    const Res* r = findRes(arg);
+    if (!r) {
+      const Res* cur = findRes(camera.frameSize());
+      Serial.printf("res %s (%dx%d) - say: res qvga|vga|svga|hd\r\n", cur->name, cur->w, cur->h);
+      return;
+    }
+    if (camera.setFrameSize(r->size)) {
+      saveRes(r->size);
+      Serial.printf("res %s = %dx%d (saved)\r\n", r->name, r->w, r->h);
+    } else {
+      Serial.println("res: the camera refused that size");
+    }
   } else if (cmd == "flip") {
     if (arg == "none") vflip = hmirror = false;
     else if (arg == "v") { vflip = true; hmirror = false; }
@@ -145,9 +188,15 @@ void command(String line) {
 
 void readConsole() {
   static String buf;
+  static bool escape = false;   // inside an ANSI escape sequence (arrow keys etc.)
   // Enter may arrive as \r (PuTTY), \n or \r\n (Arduino / PlatformIO monitors).
   while (Serial.available()) {
     char ch = (char)Serial.read();
+    if (escape) {                                // ESC [ ... ends with a letter or ~
+      if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '~') escape = false;
+      continue;
+    }
+    if (ch == 27) { escape = true; continue; }
     if (ch == '\r' || ch == '\n') {
       buf.trim();
       if (buf.length()) {
@@ -159,6 +208,10 @@ void readConsole() {
       buf = "";
     } else if (ch == 8 || ch == 127) {           // backspace
       if (buf.length()) buf.remove(buf.length() - 1);
+    } else if (ch < 32 || ch > 126) {
+      // Other control characters (PuTTY sends Ctrl-V as 0x16, arrow keys as
+      // escape sequences) would end up in commands and saved settings: drop them.
+      continue;
     } else if (buf.length() < 240) {             // room for long tokens / passwords
       buf += ch;
     }
@@ -176,7 +229,10 @@ void setup() {
   jpg = static_cast<uint8_t*>(ps_malloc(JPG_CAP));
   if (!jpg || ESP.getPsramSize() == 0) Serial.println("WARNING: no PSRAM - this image needs the Sense's 8 MB octal PSRAM");
   loadFlip();
-  if (camera.begin(vflip, hmirror)) Serial.printf("camera: %s ready (QVGA JPEG)\r\n", camera.sensorName());
+  if (camera.begin(vflip, hmirror, savedRes)) {
+    const Res* r = findRes(camera.frameSize());
+    Serial.printf("camera: %s ready (%s %dx%d JPEG)\r\n", camera.sensorName(), r->name, r->w, r->h);
+  }
   brainlink::begin(onBrain);
   info();
   help();

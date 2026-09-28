@@ -1,12 +1,10 @@
 #include "camera.h"
 
-#include <esp_camera.h>
-
 #include "board.h"
 
-static const size_t LATEST_CAP = 64 * 1024;  // QVGA JPEGs are ~8-20 KB
+static const size_t LATEST_CAP = Camera::MAX_JPEG;
 
-bool Camera::begin(bool vflip, bool hmirror) {
+bool Camera::begin(bool vflip, bool hmirror, framesize_t size) {
   camera_config_t cfg = {};
   cfg.ledc_channel = LEDC_CHANNEL_0;
   cfg.ledc_timer = LEDC_TIMER_0;
@@ -28,8 +26,8 @@ bool Camera::begin(bool vflip, bool hmirror) {
   cfg.pin_reset = CAM_PIN_RESET;
   cfg.xclk_freq_hz = 20000000;
   cfg.pixel_format = PIXFORMAT_JPEG;
-  cfg.frame_size = FRAMESIZE_QVGA;  // 320x240: what the brain's live view, tracker and vision use
-  cfg.jpeg_quality = 12;            // 0-63, lower = better; 12 is ~10-15 KB/frame
+  cfg.frame_size = FRAMESIZE_HD;    // buffers sized for the largest size we allow; setFrameSize() picks the real one
+  cfg.jpeg_quality = 12;            // 0-63, lower = better
   cfg.fb_count = 2;
   cfg.fb_location = CAMERA_FB_IN_PSRAM;
   cfg.grab_mode = CAMERA_GRAB_LATEST;
@@ -49,6 +47,8 @@ bool Camera::begin(bool vflip, bool hmirror) {
     }
   }
   setFlip(vflip, hmirror);
+  if (s != nullptr) s->set_framesize(s, size);
+  size_ = size;
 
   lock_ = xSemaphoreCreateMutex();
   latest_ = static_cast<uint8_t*>(ps_malloc(LATEST_CAP));
@@ -63,6 +63,23 @@ void Camera::setFlip(bool vflip, bool hmirror) {
   if (s == nullptr) return;
   s->set_vflip(s, vflip ? 1 : 0);
   s->set_hmirror(s, hmirror ? 1 : 0);
+}
+
+bool Camera::setFrameSize(framesize_t size) {
+  sensor_t* s = esp_camera_sensor_get();
+  if (s == nullptr || size > FRAMESIZE_HD) return false;
+  bool was = streaming_;
+  streaming_ = false;
+  vTaskDelay(pdMS_TO_TICKS(200));          // let the capture task finish its frame
+  bool ok = s->set_framesize(s, size) == 0;
+  if (ok) size_ = size;
+  // The first frames after a size change can be torn; throw a few away.
+  for (int i = 0; i < 3; ++i) {
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (fb) esp_camera_fb_return(fb);
+  }
+  streaming_ = was;
+  return ok;
 }
 
 void Camera::setStreaming(bool on, float fps) {

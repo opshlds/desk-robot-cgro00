@@ -15,7 +15,7 @@ uint16_t port = 8765;
 bool started = false, isConnected = false, wifiReported = false;
 uint32_t connectedAt = 0, sent = 0;
 uint8_t* binBuf = nullptr;
-const size_t BIN_CAP = 64 * 1024 + 1;
+const size_t BIN_CAP = 160 * 1024 + 1;   // Camera::MAX_JPEG + the type byte; the brain accepts up to 256 KB
 
 void load() {
   Preferences p;
