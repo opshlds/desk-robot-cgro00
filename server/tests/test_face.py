@@ -104,6 +104,72 @@ class FaceBoard(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cm.exception.rcvd.code, 1013)
 
 
+class Mouth(unittest.IsolatedAsyncioTestCase):
+    """Mouth levels: from the speaker (the bridge), to the face, MOUTH_DELAY_SECONDS later."""
+
+    async def asyncSetUp(self):
+        brainmain.main_loop = asyncio.get_running_loop()
+        brainmain.devices = brainmain.Registry()
+        brainmain.current_emotion = "neutral"
+        self._delay = brainconfig.MOUTH_DELAY_SECONDS
+        self.server = await websockets.serve(brainmain.handle_robot, "127.0.0.1", PORT)
+        self.speaker = await connect(f"ws://127.0.0.1:{PORT}")
+        await self.speaker.send(json.dumps({"type": "hello", "who": "xiaozhi-bridge",
+                                            "token": os.environ["ROBOT_TOKEN"], "roles": ["speaker"]}))
+        await asyncio.sleep(0.1)
+
+    async def asyncTearDown(self):
+        brainconfig.MOUTH_DELAY_SECONDS = self._delay
+        await self.speaker.close()
+        self.server.close()
+        await self.server.wait_closed()
+
+    async def connect_face(self):
+        face = await connect(f"ws://127.0.0.1:{PORT}")
+        await face.send(json.dumps({"type": "hello", "who": "amoled-face", "fw": "0.2.0",
+                                    "token": os.environ["ROBOT_TOKEN"], "roles": ["face"]}))
+        await recv_json(face)                                  # the current emotion
+        return face
+
+    async def test_reaches_the_face_after_the_delay(self):
+        face = await self.connect_face()
+        brainconfig.MOUTH_DELAY_SECONDS = 0.2
+        loop = asyncio.get_running_loop()
+        t = loop.time()
+        await self.speaker.send(json.dumps({"type": "mouth", "level": 0.4567}))
+        self.assertEqual(await recv_json(face), {"type": "mouth", "level": 0.46})
+        self.assertGreater(loop.time() - t, 0.18)
+        await self.speaker.send(json.dumps({"type": "mouth", "level": 7}))       # clamped
+        self.assertEqual(await recv_json(face), {"type": "mouth", "level": 1.0})
+        await self.speaker.send(json.dumps({"type": "mouth", "level": "loud"}))  # ignored
+        with self.assertRaises(asyncio.TimeoutError):
+            await recv_json(face, timeout=0.4)
+        await face.close()
+
+    async def test_only_the_speaker_moves_the_mouth(self):
+        face = await self.connect_face()
+        brainconfig.MOUTH_DELAY_SECONDS = 0.0
+        await face.send(json.dumps({"type": "mouth", "level": 0.5}))
+        with self.assertRaises(asyncio.TimeoutError):
+            await recv_json(face, timeout=0.3)
+        await face.close()
+
+    async def test_nothing_without_a_face(self):
+        brainconfig.MOUTH_DELAY_SECONDS = 0.0
+        await self.speaker.send(json.dumps({"type": "mouth", "level": 0.5}))
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(self.speaker.recv(), 0.3)   # the speaker never gets it either
+
+    async def test_mouthdelay_command(self):
+        await brainmain.handle_console_line("mouthdelay 0.25")
+        self.assertEqual(brainconfig.MOUTH_DELAY_SECONDS, 0.25)
+        await brainmain.handle_console_line("mouthdelay")      # just prints it
+        self.assertEqual(brainconfig.MOUTH_DELAY_SECONDS, 0.25)
+        for bad in ("mouthdelay -1", "mouthdelay 5", "mouthdelay soon"):
+            await brainmain.handle_console_line(bad)
+            self.assertEqual(brainconfig.MOUTH_DELAY_SECONDS, 0.25)
+
+
 class SleepWords(unittest.TestCase):
     def test_sleep_phrases(self):
         for said in ["Go to sleep.", "Rocky, go to sleep", "Time for bed!", "You can fall asleep now"]:

@@ -181,6 +181,32 @@ class FakeBoard:
             await asyncio.sleep(0.005)
 
 
+class FakeFace:
+    """The AMOLED face, as the brain sees it: records every mouth level."""
+
+    def __init__(self):
+        self.mouth = []           # (arrival time, level)
+        self.ws = None
+
+    async def open(self):
+        self.ws = await connect("ws://127.0.0.1:18765")
+        await self.ws.send(json.dumps({"type": "hello", "who": "amoled-face", "fw": "0.2.0",
+                                       "token": "test-robot-token", "roles": ["face"]}))
+        self.reader = asyncio.create_task(self._read())
+
+    async def _read(self):
+        try:
+            async for msg in self.ws:
+                ev = json.loads(msg)
+                if ev.get("type") == "mouth":
+                    self.mouth.append((time.monotonic(), ev["level"]))
+        except websockets.ConnectionClosed:
+            pass
+
+    async def close(self):
+        await self.ws.close()
+
+
 @unittest.skipUnless(HAVE_OPUS, "opuslib_next / libopus not installed")
 class BridgeEndToEnd(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -326,6 +352,57 @@ class BridgeEndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(time.monotonic() - stopped, 0.3 + brainconfig.SLEEP_DELAY_SECONDS - 0.1)
         self.assertEqual(brainmain.awake_until, 0.0)
 
+    async def test_mouth_follows_the_voice(self):
+        """Mouth levels reach the face while he talks, at the audio's pace,
+        end at 0, and stop when he's interrupted."""
+        delay = brainconfig.MOUTH_DELAY_SECONDS
+        brainconfig.MOUTH_DELAY_SECONDS = 0.05
+        self.addCleanup(setattr, brainconfig, "MOUTH_DELAY_SECONDS", delay)
+        face = FakeFace()
+        await face.open()
+        board = FakeBoard()
+        ota = await board.ota()
+        await board.open(ota["websocket"]["url"], ota["websocket"]["token"])
+        await board.send({"type": "listen", "state": "detect", "text": "Computer"})
+        await board.send({"type": "listen", "state": "start", "mode": "auto"})
+        await board.speak(1.2)
+        await asyncio.wait_for(board.tts_stop.wait(), 10)
+        await asyncio.sleep(0.5)                       # the last frames play out, then the 0
+
+        levels = [lv for _, lv in face.mouth]
+        self.assertGreater(len(levels), 5)
+        self.assertGreater(max(levels), 0.8)           # the tone opens the mouth wide
+        self.assertEqual(levels[-1], 0.0)              # and it closes at the end
+        self.assertTrue(all(0.0 <= lv <= 1.0 for lv in levels))
+        # From the first level to the closing 0 = the reply's length (20 frames of 60 ms).
+        expected = len(SENTENCES) * SENTENCE_SECONDS
+        span = face.mouth[-1][0] - face.mouth[0][0]
+        self.assertAlmostEqual(span, expected, delta=0.25)
+        # Never more often than once a frame; never silent for longer than the keepalive while talking.
+        gaps = [b[0] - a[0] for a, b in zip(face.mouth, face.mouth[1:])]
+        self.assertLess(max(gaps[:-1]), bridge.MOUTH_KEEPALIVE + 0.1)
+        self.assertLessEqual(len(levels), expected / 0.06 + 3)
+        # The brain holds each level back MOUTH_DELAY_SECONDS behind the board's audio.
+        self.assertGreater(face.mouth[0][0], board.frames[0][0] + 0.03)
+
+        # Interrupted: a 0 right away, and nothing after it.
+        await board.send({"type": "listen", "state": "start", "mode": "auto"})
+        board.tts_start.clear()
+        self.ears.bytes = 0
+        self.ears.question = "tell me a story"
+        await board.speak(1.2)
+        await asyncio.wait_for(board.tts_start.wait(), 5)
+        await asyncio.sleep(0.4)
+        before = len(face.mouth)
+        await board.send({"type": "abort", "reason": "wake_word_detected"})
+        await asyncio.sleep(0.05 + 0.15)               # the brain's delay, plus a little
+        self.assertGreater(len(face.mouth), before)    # he was talking, and the 0 arrived
+        self.assertEqual(face.mouth[-1][1], 0.0)
+        settled = len(face.mouth)
+        await asyncio.sleep(1.0)
+        self.assertEqual(face.mouth[settled:], [])
+        await face.close()
+
     async def test_bridge_never_cuts_a_reply(self):
         """Even if "asleep" arrives mid-reply, the bridge lets the reply finish first."""
         board = FakeBoard()
@@ -368,9 +445,72 @@ class BridgePieces(unittest.TestCase):
         self.assertEqual(bridge.firmware_version({"application": "x"}, ""), "?")
         self.assertEqual(bridge.firmware_version({}), "?")
 
+    def test_frame_level(self):
+        silence = b"\x00" * bridge.FRAME_BYTES
+        self.assertEqual(bridge.frame_level(silence), 0.0)
+        self.assertEqual(bridge.frame_level(b""), 0.0)
+        loud = tone(0.06)                               # 0.3 full scale: about -13.5 dBFS
+        self.assertGreater(bridge.frame_level(loud), 0.85)
+        full = (np.ones(960) * 32767).astype(np.int16).tobytes()
+        self.assertEqual(bridge.frame_level(full), 1.0)
+        hiss = (np.sin(np.arange(960)) * 100).astype(np.int16).tobytes()   # about -53 dBFS
+        self.assertEqual(bridge.frame_level(hiss), 0.0)
+        # Louder never opens it less; the curve shapes the middle.
+        amps = [0.005, 0.01, 0.03, 0.1, 0.2, 0.3]
+        got = [bridge.frame_level((np.sin(np.arange(960) / 3) * a * 32767).astype(np.int16).tobytes())
+               for a in amps]
+        self.assertEqual(got, sorted(got))
+        mid = (np.sin(np.arange(960) / 3) * 0.05 * 32767).astype(np.int16).tobytes()   # about -29 dBFS
+        self.assertAlmostEqual(bridge.frame_level(mid, curve=1.0), (-29.0 + 45) / 35, delta=0.03)
+        self.assertLess(bridge.frame_level(mid, curve=1.5), bridge.frame_level(mid, curve=1.0))
+
     def test_allowlist(self):
         self.assertTrue(bridge.device_allowed("80:45:6B:24:76:30"))
         self.assertFalse(bridge.device_allowed("aa:bb:cc:dd:ee:ff"))
+
+
+class MouthClockTiming(unittest.IsolatedAsyncioTestCase):
+    async def test_levels_at_play_time_then_zero(self):
+        loop = asyncio.get_running_loop()
+        sent = []
+        clock = bridge.MouthClock(lambda lv: sent.append((loop.time(), lv)))
+        t0 = loop.time()
+        levels = [0.5, 0.5, 0.5, 0.5, 0.9, 0.2]
+        for n, lv in enumerate(levels):                 # all handed over at once, like the prebuffer
+            clock.frame(n, lv)
+        clock.finish(len(levels))
+        await asyncio.sleep(0.5)
+        # 0.5 at 0 ms, (unchanged 60/120 ms skipped), 0.5 again at 180 ms, 0.9, 0.2, then 0 at 360 ms.
+        self.assertEqual([lv for _, lv in sent], [0.5, 0.5, 0.9, 0.2, 0.0])
+        at = [round((t - t0) / 0.06) for t, _ in sent]
+        self.assertEqual(at, [0, 3, 4, 5, 6])
+
+    async def test_stop_cancels_what_is_due(self):
+        loop = asyncio.get_running_loop()
+        sent = []
+        clock = bridge.MouthClock(lambda lv: sent.append(lv))
+        for n in range(10):
+            clock.frame(n, 0.7)
+        await asyncio.sleep(0.1)
+        clock.stop()
+        await asyncio.sleep(0.7)
+        self.assertEqual(sent, [0.7, 0.0])
+        clock.stop()                                    # already closed: no second 0
+        self.assertEqual(sent, [0.7, 0.0])
+
+    async def test_a_late_frame_moves_the_clock(self):
+        loop = asyncio.get_running_loop()
+        sent = []
+        clock = bridge.MouthClock(lambda lv: sent.append((loop.time(), lv)))
+        clock.frame(0, 0.3)
+        await asyncio.sleep(0.3)                        # the voice fell behind: frame 1 is 240 ms late
+        t1 = loop.time()
+        clock.frame(1, 0.8)
+        clock.frame(2, 0.4)
+        await asyncio.sleep(0.2)
+        self.assertEqual([lv for _, lv in sent], [0.3, 0.8, 0.4])
+        self.assertAlmostEqual(sent[1][0] - t1, 0.0, delta=0.02)
+        self.assertAlmostEqual(sent[2][0] - t1, 0.06, delta=0.02)
 
 
 if __name__ == "__main__":

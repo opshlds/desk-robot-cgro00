@@ -75,6 +75,7 @@ TUNABLE = {                 # config knobs the console may change live: (min, ma
     "TURN_THRESHOLD": (0.1, 0.95),
     "TURN_MAX_SILENCE": (0.5, 6.0),
     "AWAKE_SECONDS": (10.0, 600.0),
+    "MOUTH_DELAY_SECONDS": (0.0, 1.0),
 }
 VOICE_TUNABLE = {           # speaker tuning the console may change live (mouth.Leveler reads these per reply)
     "TTS_LEVEL": (0.08, 0.40),
@@ -220,6 +221,9 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
                 # The face screen was touched: tap wakes him, long press = sleep.
                 asyncio.create_task(face_touched(str(event.get("gesture", ""))))
                 continue
+            if kind == "mouth" and "speaker" in roles:
+                mouth_level(event.get("level"))
+                continue
             if kind == "abort" and "speaker" in roles:
                 # The human interrupted (wake word while Rocky was talking).
                 stop_speaking("interrupted by the wake word")
@@ -264,6 +268,27 @@ async def face_touched(gesture: str) -> None:
         await send_to_robot({"type": "emotion", "name": "sleepy"})
         await asyncio.sleep(config.SLEEP_DELAY_SECONDS)
         await fall_asleep(told=True)
+
+
+def mouth_level(raw) -> None:
+    """A mouth level from the speaker's bridge, stamped for the moment its
+    audio should play: pass it to the face MOUTH_DELAY_SECONDS later (the
+    voice board's own playback latency). Nothing is sent without a face."""
+    try:
+        level = float(raw)
+    except (TypeError, ValueError):
+        return
+    if level != level or devices.owner("face") is None:  # NaN, or no face to move
+        return
+    level = round(max(0.0, min(1.0, level)), 2)
+    delay = max(0.0, config.MOUTH_DELAY_SECONDS)
+    asyncio.get_running_loop().call_later(delay, lambda: asyncio.ensure_future(send_mouth(level)))
+
+
+async def send_mouth(level: float) -> None:
+    text = json.dumps({"type": "mouth", "level": level})
+    for conn in devices.targets("mouth"):  # the face (it may have left meanwhile)
+        await _send(conn, text)
 
 
 def stop_speaking(why: str) -> None:
@@ -328,8 +353,22 @@ async def handle_console_line(line: str) -> bool:
             await set_volume(float(arg))
         except ValueError:
             print("usage: volume <0.0-1.0>")
+    elif cmd == "mouthdelay":
+        lo, hi = TUNABLE["MOUTH_DELAY_SECONDS"]
+        if arg:
+            try:
+                value = float(arg)
+                if not lo <= value <= hi:
+                    raise ValueError
+            except ValueError:
+                print(f"usage: mouthdelay <seconds, {lo:g}-{hi:g}>")
+                return True
+            config.MOUTH_DELAY_SECONDS = value
+            print(f"mouth delay = {value:g} s (until restart; set MOUTH_DELAY_SECONDS in config.py to keep)")
+        else:
+            print(f"mouth delay = {config.MOUTH_DELAY_SECONDS:g} s")
     else:
-        print("commands: ask <q> | say <text> | volume <0-1> | listen | mic | track on|off | emo <name> | pan <deg> | tilt <deg> | status | quit")
+        print("commands: ask <q> | say <text> | volume <0-1> | mouthdelay [s] | listen | mic | track on|off | emo <name> | pan <deg> | tilt <deg> | status | quit")
     return True
 
 

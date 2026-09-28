@@ -14,8 +14,8 @@ that is already taken is refused, so two speakers never talk at once.
 
 Server -> board messages are routed by type (ROUTES). Board -> server
 messages are only accepted from the board that owns the matching role
-(mic audio from the mic, camera frames from the camera, speak_done from the
-speaker).
+(mic audio from the mic, camera frames from the camera, speak_done and
+mouth levels from the speaker).
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ ROUTES: dict[str, tuple[str, ...] | None] = {
     "volume": ("speaker",),
     "mic": ("mic",),
     "stream": ("camera",),
+    "mouth": ("face",),       # mouth opening while he talks (from the speaker's bridge, delayed)
 }
 
 

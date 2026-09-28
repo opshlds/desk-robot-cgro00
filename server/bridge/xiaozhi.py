@@ -20,6 +20,7 @@ What maps to what:
   brain 0x01 PCM             -> Opus 60 ms frames, sent in real time (5 frames ahead)
   brain speak_end            -> board tts stop after the last frame
   brain emotion              -> board llm emotion
+  (each reply frame's loudness) -> brain {"type": "mouth", "level": 0..1} at the frame's play time
   brain volume               -> board MCP tool self.audio_speaker.set_volume
   brain asleep on            -> close the board's channel (it goes back to waiting for its wake word)
 
@@ -27,6 +28,8 @@ Settings (server/.env): ROBOT_TOKEN (shared with the brain), and optionally
   BRIDGE_HOST       address the board is told to connect to (default 192.168.1.99)
   XIAOZHI_TOKEN     token the board must present (sent to it by the OTA reply)
   XIAOZHI_DEVICES   comma-separated MACs allowed to connect (empty = any)
+  BRIDGE_MOUTH_FLOOR_DB / BRIDGE_MOUTH_CEIL_DB / BRIDGE_MOUTH_CURVE
+                    mouth level mapping (defaults -45 / -10 / 1.0; see frame_level)
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ import time
 import uuid
 from http import HTTPStatus
 
+import numpy as np
 import websockets
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import ServerConnection, serve
@@ -60,6 +64,16 @@ WS_PATH = "/xiaozhi/v1/"
 BRAIN_URL = os.environ.get("BRIDGE_BRAIN_URL", f"ws://127.0.0.1:{config.PORT}")
 XIAOZHI_TOKEN = os.environ.get("XIAOZHI_TOKEN", "")
 ALLOWED = {m.strip().lower() for m in os.environ.get("XIAOZHI_DEVICES", "").split(",") if m.strip()}
+
+# Mouth sync (Part 3 M3). Each reply frame's loudness becomes a mouth
+# opening: RMS -> dBFS, MOUTH_FLOOR_DB -> 0 and MOUTH_CEIL_DB -> 1, then
+# ** MOUTH_CURVE (above 1 = opens less for ordinary speech, below 1 = more).
+# The brain holds his voice near TTS_LEVEL (0.12 RMS, about -18 dBFS), so
+# ordinary speech lands around 0.75 and syllable peaks near 0.95.
+MOUTH_FLOOR_DB = float(os.environ.get("BRIDGE_MOUTH_FLOOR_DB", "-45"))
+MOUTH_CEIL_DB = float(os.environ.get("BRIDGE_MOUTH_CEIL_DB", "-10"))
+MOUTH_CURVE = float(os.environ.get("BRIDGE_MOUTH_CURVE", "1.0"))
+MOUTH_KEEPALIVE = 0.18        # repeat an unchanged level this often (the face closes 300 ms after the last one)
 
 END = object()  # end-of-reply marker in the outgoing frame queue
 
@@ -130,6 +144,103 @@ class Framer:
 
     def clear(self) -> None:
         self.buf.clear()
+
+
+def frame_level(pcm: bytes, floor_db: float | None = None, ceil_db: float | None = None,
+                curve: float | None = None) -> float:
+    """How far the mouth opens for one frame of s16le PCM, 0..1: its RMS in
+    dBFS, mapped linearly from floor_db (closed) to ceil_db (wide open),
+    then raised to `curve`."""
+    floor_db = MOUTH_FLOOR_DB if floor_db is None else floor_db
+    ceil_db = MOUTH_CEIL_DB if ceil_db is None else ceil_db
+    curve = MOUTH_CURVE if curve is None else curve
+    samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
+    if samples.size == 0:
+        return 0.0
+    rms = float(np.sqrt(np.mean(samples * samples))) / 32768.0
+    if rms <= 0.0:
+        return 0.0
+    db = 20.0 * np.log10(rms)
+    x = (db - floor_db) / (ceil_db - floor_db)
+    x = min(1.0, max(0.0, x))
+    return float(x ** curve)
+
+
+class MouthClock:
+    """Reports each reply frame's level at the time it would play.
+
+    Frame n of a reply plays at t0 + n * 60 ms (t0 = when its first frame
+    left; the board's own latency is added by the brain's MOUTH_DELAY_SECONDS).
+    This is independent of the send pacing, which runs a few frames ahead.
+    If a frame only turns up after its nominal play time (the voice fell
+    behind), the board plays it on arrival, so the clock is re-anchored there.
+
+    `send` is called with each level to report (rounded to 2 decimals): when
+    it changes, or every MOUTH_KEEPALIVE seconds while it doesn't, and 0 at
+    the end of the reply or when it is cut off."""
+
+    def __init__(self, send, loop: asyncio.AbstractEventLoop | None = None) -> None:
+        self.send = send
+        self.loop = loop
+        self.t0: float | None = None
+        self.handles: list[asyncio.TimerHandle] = []
+        self.last: float | None = None     # last level sent (None = nothing yet)
+        self.last_at = 0.0
+        self.active = False                # sent something non-final since the last 0
+
+    def _loop(self) -> asyncio.AbstractEventLoop:
+        if self.loop is None:
+            self.loop = asyncio.get_running_loop()
+        return self.loop
+
+    def frame(self, n: int, level: float) -> None:
+        """Frame n (0 = first of the reply) is about to be sent."""
+        loop = self._loop()
+        now = loop.time()
+        if n == 0 or self.t0 is None:
+            self.t0 = now - n * FRAME_MS / 1000
+        due = self.t0 + n * FRAME_MS / 1000
+        if due < now:                                  # late: plays when it arrives
+            self.t0 += now - due
+            due = now
+        self.handles.append(loop.call_at(due, self._report, level))
+
+    def _report(self, level: float) -> None:
+        level = round(max(0.0, min(1.0, level)), 2)
+        now = self._loop().time()
+        if level == self.last and now - self.last_at < MOUTH_KEEPALIVE - 0.01:
+            return
+        self.last, self.last_at = level, now
+        self.active = True
+        self.send(level)
+
+    def finish(self, frames: int) -> None:
+        """The reply had `frames` frames: close the mouth after the last one plays."""
+        if self.t0 is None:
+            return
+        loop = self._loop()
+        due = max(loop.time(), self.t0 + frames * FRAME_MS / 1000)
+        self.handles.append(loop.call_at(due, self._close))
+        self.t0 = None
+
+    def _close(self) -> None:
+        self.handles.clear()
+        if self.active:
+            self.active = False
+            self.last, self.last_at = 0.0, self._loop().time()
+            self.send(0.0)
+
+    def stop(self, report: bool = True) -> None:
+        """Cut off (abort, a new reply, the channel closing): drop every level
+        still due and close the mouth now."""
+        for h in self.handles:
+            h.cancel()
+        self.handles.clear()
+        self.t0 = None
+        if report:
+            self._close()
+        else:
+            self.active = False
 
 
 def make_codecs():
@@ -225,6 +336,8 @@ class Session:
         self.sleep_deadline: asyncio.TimerHandle | None = None
         self.mic_on = True
         self.new_reply = True        # restart the real-time clock for the next frame sent
+        self.mouth = MouthClock(lambda level: asyncio.ensure_future(
+            self.to_brain({"type": "mouth", "level": level})))
         self.tools: set[str] = set()
         self.mcp_id = 0
         self.frames_up = 0
@@ -311,6 +424,7 @@ class Session:
             elif kind == "abort":
                 log(f"[{self.device_id}] abort ({ev.get('reason', 'button')})")
                 self.drop_output()
+                self.mouth.stop()
                 self.speaking = False
                 self.discard = True
                 self.new_reply = True
@@ -334,7 +448,7 @@ class Session:
             if isinstance(msg, bytes):
                 if msg[:1] == b"\x01" and self.speaking and not self.discard:
                     for frame in self.framer.push(msg[1:]):
-                        await self.out.put(self.encoder.encode(frame, FRAME_SAMPLES))
+                        await self.out.put((self.encoder.encode(frame, FRAME_SAMPLES), frame_level(frame)))
                 continue
             try:
                 ev = json.loads(msg)
@@ -344,6 +458,7 @@ class Session:
             if kind == "speak_begin":
                 self.cancel_sleep()  # talking again: he's awake after all
                 self.drop_output()
+                self.mouth.stop()
                 self.discard = False
                 self.new_reply = True
                 self.speaking = True
@@ -355,7 +470,7 @@ class Session:
                     continue
                 last = self.framer.flush()
                 if last is not None:
-                    await self.out.put(self.encoder.encode(last, FRAME_SAMPLES))
+                    await self.out.put((self.encoder.encode(last, FRAME_SAMPLES), frame_level(last)))
                 await self.out.put(END)
             elif kind == "emotion":
                 await self.to_dev({"type": "llm", "text": "", "emotion": str(ev.get("name", "neutral"))})
@@ -395,10 +510,12 @@ class Session:
                 # If the board never says it's listening again, don't leave the brain waiting.
                 wait = PLAYBACK_GRACE + (max(0.0, start + n * FRAME_MS / 1000 - loop.time()) if start else 0.0)
                 self.done_timer = loop.call_later(wait, self.playback_finished)
+                self.mouth.finish(n)
                 start, n = None, 0
                 continue
             if self.discard:
                 continue
+            opus_frame, level = item
             if start is None or self.new_reply:
                 start, n = loop.time(), 0
                 self.new_reply = False
@@ -406,8 +523,11 @@ class Session:
             delay = due - loop.time()
             if delay > 0:
                 await asyncio.sleep(delay)
+            if self.discard or self.new_reply and n:
+                continue  # cut off (abort or a new reply) while this frame waited its turn
+            self.mouth.frame(n, level)
             try:
-                await self.dev.send(item)
+                await self.dev.send(opus_frame)
             except websockets.ConnectionClosed:
                 return
             n += 1
@@ -461,6 +581,7 @@ class Session:
                 t.cancel()
             if self.done_timer is not None:
                 self.done_timer.cancel()
+            self.mouth.stop(report=False)
             self.cancel_sleep()
             code = getattr(self.brain, "close_code", None)
             await self.brain.close()

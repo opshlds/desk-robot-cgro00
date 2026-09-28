@@ -172,6 +172,13 @@ SLEEP_PHRASES = [        # any of these puts him to sleep until the next "hey <n
 SLEEP_DELAY_SECONDS = 1.5  # after his goodnight line has played, wait this long before he
                            # actually sleeps (sleep ends the voice board's session)
 
+# Mouth sync (face screen): the voice board's bridge reports how open the
+# mouth should be at the moment each bit of audio would play; the brain holds
+# each level back this long before passing it to the face, to allow for the
+# voice board's own playback latency. Tune live with `mouthdelay <s>` in the
+# console (or the live-view page), then set it here.
+MOUTH_DELAY_SECONDS = 0.15
+
 # Emotions the firmware knows how to display (see firmware/src/face.cpp).
 EMOTIONS = [
     "neutral",
