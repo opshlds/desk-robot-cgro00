@@ -8,8 +8,8 @@ Firmware for the **Waveshare ESP32-S3-Touch-AMOLED-1.43** (466x466 AMOLED, FT316
 | M1 standalone face, console control | done (0.1.1, verified on the board: CO5300 panel, ~45 fps) |
 | M2 WiFi + brain link (role `face`), touches to the brain | done (0.2.0) |
 | M3 mouth sync (`mouth` levels from the brain) | done (0.2.0 obeys `mouth`; brain side in patch 0010) |
-| 0.2.1 console fixes: token fingerprint, pasted `ROBOT_TOKEN=` lines, 240-char lines | **this build (0.2.1)** |
-| M4 gaze, burn-in care | later |
+| 0.2.1 console fixes: token fingerprint, pasted `ROBOT_TOKEN=` lines, 240-char lines | done (0.2.1) |
+| M4 gaze, drift, dim after 3 min, screen off after 5 min; console ignores control characters | **this build (0.3.0)** |
 
 ## Layout
 ```
@@ -29,11 +29,11 @@ src/main.cpp              boot, loop, serial console
 Face Lab and the firmware run the same engine. A host-side test compares their draw lists frame by frame and they match. So a face tuned in Face Lab looks the same on the board.
 
 ## Quickest: flash the prebuilt image with esptool
-`bin/face-fw-0.2.1-factory.bin` is a complete image (bootloader, partitions and app), built from this source. esptool is already on the PC.
+`bin/face-fw-0.3.0-factory.bin` is a complete image (bootloader, partitions and app), built from this source. esptool is already on the PC.
 
 ```
 esptool --port COMx read-flash 0 ALL waveshare-amoled-factory.bin     (one-time backup, 16 MB)
-esptool --port COMx write-flash 0x0 bin\face-fw-0.2.1-factory.bin
+esptool --port COMx write-flash 0x0 bin\face-fw-0.3.0-factory.bin
 ```
 The factory image blanks the saved settings (token, WiFi, brain). On a board that is already set up, write only the app instead and the settings survive: `esptool --port COMx write-flash 0x10000 bin\face-fw-<version>-app.bin`.
 To restore the backup: `esptool --port COMx write-flash 0x0 waveshare-amoled-factory.bin`.
@@ -83,7 +83,16 @@ wifi IOTNSFW <password>        saves and reboots (the SSID may contain spaces; t
 brain 192.168.1.99 8765        only if the brain moves (this is the default)
 net                            WiFi + brain status
 ```
-Once it's connected, the brain console's `status` lists `amoled-face (fw 0.2.1) [face]`. From then on the brain drives the face: emotions, sleep, and mouth levels (M3). Touches go to the brain (needs patch 0008). Tap wakes him (the Yahboom still needs "Computer" before it listens). Long press puts him to sleep. When the brain isn't connected, the board handles touches itself.
+Once it's connected, the brain console's `status` lists `amoled-face (fw 0.3.0) [face]`. From then on the brain drives the face: emotions, sleep, and mouth levels (M3). Touches go to the brain (needs patch 0008). Tap wakes him (the Yahboom still needs "Computer" before it listens). Long press puts him to sleep. When the brain isn't connected, the board handles touches itself.
+
+## M4: gaze and screen care
+- **Gaze:** the brain sends `{"type":"gaze","x":..,"y":..}` (brain console: `gaze 0.8 0`, `gaze off`). On the board's own console: `look <x> <y> [ms]` or `look off`. The eyes hold the target for 3 s, then glance around again.
+- **Drift:** the whole face wanders ±6 px awake and ±10 px asleep, one pixel step every 10 s or so. The ring stays put.
+- **Idle:** 3 min without activity -> dims to 30/255 (lids droop a little); 5 min -> the panel is switched off (sleep mode) and nothing is drawn. A touch, "Computer", an emotion, a mouth level or a gaze brings it back. `poke` on the console does the same.
+- `info` shows the idle time, whether the screen is on and the current drift.
+- The console drops control characters and arrow keys (PuTTY's Ctrl-V, etc.), like the camera board.
+- All the numbers are in `design/face_params.json` (`layout`), tunable in Face Lab.
+- Parity check after changing the engine: see the top of `tools/host_parity_test.cpp`.
 
 ## Changing the face
 1. Tune in Face Lab (the published page, or `design/face_lab.html`), then **Copy all parameters**.
@@ -92,5 +101,5 @@ Once it's connected, the brain console's `status` lists `amoled-face (fw 0.2.1) 
 
 ## Notes
 - LVGL 8.4.0 and Arduino_GFX 1.6.8 on the Arduino-ESP32 3.3.11 core (pioarduino 55.03.311). GFX 1.6.2 no longer compiles on this core.
-- AMOLED burn-in: the background stays black (pixels off), and the face dims when he's asleep. M4 adds slow whole-face drift and dims the screen when nobody is around.
+- AMOLED burn-in: the background stays black (pixels off), and the face dims when he's asleep. M4 (0.3.0) adds slow whole-face drift, dims after 3 minutes and switches the panel off after 5.
 - The panel wants even start and odd end coordinates. The LVGL rounder handles this.

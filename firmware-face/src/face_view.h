@@ -10,4 +10,5 @@ void frame();                    // render the engine's current state
 void setTestPattern(bool on);    // M0 check: rings, panel name, touch dot
 bool testPattern();
 void setTouchDot(int x, int y);  // -1,-1 hides it (test pattern only)
+void repaintAll();               // next frame redraws the whole screen (after the panel slept)
 }  // namespace face_view

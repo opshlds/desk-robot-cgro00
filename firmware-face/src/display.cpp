@@ -14,6 +14,7 @@ Arduino_OLED* gfx = nullptr;   // SH8601 and CO5300 are both Arduino_OLED (setBr
 PanelType panelType = PanelType::SH8601;
 int curBright = -1;          // -1: nothing sent yet
 int brightOverride = -1;
+bool poweredOn = true;
 uint32_t pixels = 0;
 
 const int kBufLines = 48;
@@ -94,5 +95,16 @@ uint8_t brightness() { return curBright < 0 ? 0 : (uint8_t)curBright; }
 void setBrightnessOverride(int b) { brightOverride = b; if (b >= 0) setBrightness((uint8_t)b); }
 int brightnessOverride() { return brightOverride; }
 uint32_t flushedPixels() { return pixels; }
+
+// Screen off when idle: brightness 0 plus the panel's display-off command, so
+// no pixel is driven at all. The face engine keeps running; setPower(true)
+// before the next draw brings it back.
+void setPower(bool on) {
+  if (!gfx || on == poweredOn) return;
+  poweredOn = on;
+  if (on) gfx->displayOn();
+  else { setBrightness(0); gfx->displayOff(); }
+}
+bool powered() { return poweredOn; }
 
 }  // namespace display

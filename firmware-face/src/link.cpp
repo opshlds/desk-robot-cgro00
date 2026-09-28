@@ -69,6 +69,13 @@ void onEvent(WStype_t type, uint8_t* payload, size_t length) {
       if (!strcmp(t, "emotion")) handler("emotion", doc["name"] | "neutral");
       else if (!strcmp(t, "asleep")) handler("asleep", (doc["on"] | false) ? "on" : "off");
       else if (!strcmp(t, "mouth")) handler("mouth", String(doc["level"] | 0.0f, 3).c_str());
+      else if (!strcmp(t, "gaze")) {    // M4: {"type":"gaze","x":-1..1,"y":-1..1[,"hold_ms":n]} or {"type":"gaze","release":true}
+        if (doc["release"] | false) handler("gaze", "release");
+        else {
+          String a = String(doc["x"] | 0.0f, 3) + " " + String(doc["y"] | 0.0f, 3) + " " + String((long)(doc["hold_ms"] | -1));
+          handler("gaze", a.c_str());
+        }
+      }
       // Anything else (volume, pan, ...) isn't for the face.
       break;
     }

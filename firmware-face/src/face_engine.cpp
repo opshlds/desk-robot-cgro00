@@ -4,6 +4,7 @@
 #include <string.h>
 
 // Port of design/face_engine.js. Keep the two in step.
+// M4: drift (whole pixels, the ring stays put), idle dim -> screen off, held gaze.
 
 namespace {
 const float kPi = 3.14159265f;
@@ -29,7 +30,7 @@ FaceEngine::FaceEngine() {
 bool FaceEngine::setEmotion(const char* name, bool quiet) {
   for (int i = 0; i < kNumEmotions; i++) {
     if (strcmp(kEmotions[i].name, name) != 0) continue;
-    if (i != emo_ && !quiet) { pop_ = 1; ringT_ = 1; }
+    if (i != emo_ && !quiet) { pop_ = 1; ringT_ = 1; poke(); }
     emo_ = i;
     const EmotionDef& e = kEmotions[i];
     for (int k = 0; k < kNumParams; k++) tgt_.v[k] = e.p[k];
@@ -43,16 +44,17 @@ bool FaceEngine::setEmotion(const char* name, bool quiet) {
 
 void FaceEngine::setAsleep(bool on) {
   asleep_ = on;
-  if (!on) { pop_ = 1; nextBlink_ = 0; }
+  if (!on) { poke(); pop_ = 1; nextBlink_ = 0; }   // falling asleep is not activity
 }
 
-void FaceEngine::setTalking(bool on) { talking_ = on; if (!on) level_ = 0; }
-void FaceEngine::setLevel(float v) { level_ = clampf(v, 0, 1); }
+void FaceEngine::setTalking(bool on) { talking_ = on; poke(); if (!on) level_ = 0; }
+void FaceEngine::setLevel(float v) { level_ = clampf(v, 0, 1); if (level_ > 0.02f) poke(); }
 
-void FaceEngine::lookAt(float x, float y) {
+void FaceEngine::lookAt(float x, float y, int32_t holdMs) {
   gtx_ = clampf(x, -1, 1) * LAYOUT_GAZE_MAX_X;
   gty_ = clampf(y, -1, 1) * LAYOUT_GAZE_MAX_Y;
-  nextSaccade_ = now_ + 2500;
+  nextSaccade_ = now_ + (uint32_t)(holdMs < 0 ? LAYOUT_GAZE_HOLD_MS : holdMs);
+  poke();
 }
 
 void FaceEngine::step(float dt, uint32_t now) {
@@ -65,6 +67,22 @@ void FaceEngine::step(float dt, uint32_t now) {
   pop_ *= expf(-dt / 160.0f);
   ringT_ *= expf(-dt / (ring_ == RING_FLASH ? 380.0f : 900.0f));
   ringPhase_ = fmodf(ringPhase_ + dt * 0.3f, 360.0f);
+
+  // Idle: dim after idleDimS, screen off after offAfterS (0 = never).
+  // Slow fade down, quick return on any poke().
+  if (idleMs_ < 1e9f) idleMs_ += dt;
+  float dimTgt = (LAYOUT_IDLE_DIM_S > 0 && idleMs_ >= LAYOUT_IDLE_DIM_S * 1000.0f) ? 1.0f : 0.0f;
+  float offTgt = (LAYOUT_OFF_AFTER_S > 0 && idleMs_ >= LAYOUT_OFF_AFTER_S * 1000.0f) ? 1.0f : 0.0f;
+  dimT_ = easeTo(dimT_, dimTgt, dt, dimTgt > dimT_ ? LAYOUT_IDLE_FADE_MS : 150);
+  offT_ = easeTo(offT_, offTgt, dt, offTgt > offT_ ? LAYOUT_IDLE_FADE_MS : 150);
+  if (offTgt > 0 && offT_ > 0.99f) offT_ = 1;
+
+  // Drift: slow Lissajous, whole pixels, larger while asleep.
+  driftA_ = fmodf(driftA_ + dt / (LAYOUT_DRIFT_PERIOD_X_S * 1000.0f) * 2 * kPi, 2 * kPi);
+  driftB_ = fmodf(driftB_ + dt / (LAYOUT_DRIFT_PERIOD_Y_S * 1000.0f) * 2 * kPi, 2 * kPi);
+  float amp = LAYOUT_DRIFT_PX + (LAYOUT_DRIFT_ASLEEP_PX - LAYOUT_DRIFT_PX) * sleepT_;
+  ox_ = (int)lroundf(amp * sinf(driftA_));
+  oy_ = (int)lroundf(amp * sinf(driftB_));
 
   // Blink: 70 ms down, 120 ms up, every 2.2-6 s; sometimes a double.
   if (!asleep_ && blinkDir_ == 0 && now >= nextBlink_) blinkDir_ = 1;
@@ -89,21 +107,23 @@ void FaceEngine::step(float dt, uint32_t now) {
     }
     nextSaccade_ = now + 1200 + (uint32_t)(rnd() * 2800);
   }
-  gx_ = easeTo(gx_, gtx_ * (1 - sleepT_), dt, 55);
-  gy_ = easeTo(gy_, gty_ * (1 - sleepT_), dt, 55);
+  gx_ = easeTo(gx_, gtx_ * (1 - sleepT_), dt, LAYOUT_GAZE_MS);
+  gy_ = easeTo(gy_, gty_ * (1 - sleepT_), dt, LAYOUT_GAZE_MS);
 
   // Mouth follows the voice level: fast attack, slower release.
   float mt = talking_ ? level_ : 0;
   mouth_ = easeTo(mouth_, mt, dt, mt > mouth_ ? 25 : 70);
 
   // Z's while asleep.
-  if (sleepT_ > 0.8f && now >= nextZed_) {
+  if (sleepT_ > 0.8f && dimT_ < 0.5f && now >= nextZed_) {
     for (auto& z : zeds_) if (!z.a) { z.a = true; z.t = 0; z.x0 = LAYOUT_CX + 50 + rnd() * 20; break; }
     nextZed_ = now + 1500;
   }
   for (auto& z : zeds_) if (z.a) { z.t += dt / 3200.0f; if (z.t >= 1) z.a = false; }
 
-  bright_ = (uint8_t)lroundf(LAYOUT_BRIGHT_AWAKE + (LAYOUT_BRIGHT_ASLEEP - LAYOUT_BRIGHT_AWAKE) * sleepT_);
+  float base = LAYOUT_BRIGHT_AWAKE + (LAYOUT_BRIGHT_ASLEEP - LAYOUT_BRIGHT_AWAKE) * sleepT_;
+  float dimmed = fminf2(base, (float)LAYOUT_BRIGHT_IDLE);
+  bright_ = (uint8_t)lroundf((base + (dimmed - base) * dimT_) * (1 - offT_));
 }
 
 Prim& FaceEngine::add(PrimKind k) {
@@ -155,7 +175,7 @@ void FaceEngine::eye(float ex, float ey, int side, const float* e, const uint8_t
 
   // Upper lid: black quad; its bottom edge passes the eye centre-line at
   // `lid` of the height, tilted by `slant` px (inner corner lower if > 0).
-  float lidBase = clampf(e[P_LID] - side * e[P_ASYM], 0, 1);   // asym: left eye lower
+  float lidBase = clampf(e[P_LID] - side * e[P_ASYM] + LAYOUT_IDLE_LID * dimT_ * (1 - sl), 0, 1);   // asym: left eye lower; idle: drowsy
   if (sl < 0.5f) {   // glint, kept below the lid line
     uint8_t gc[3];
     for (int i = 0; i < 3; i++) gc[i] = (uint8_t)(c[i] + (255 - c[i]) * 0.55f);
@@ -196,13 +216,14 @@ int FaceEngine::render(Prim* out) {
   float breathe = sinf(breath_) * sleepT_;
   float o = 1 - 0.35f * sleepT_ * (0.5f + 0.5f * breathe);
   uint8_t c[3] = {(uint8_t)lroundf(col_[0]), (uint8_t)lroundf(col_[1]), (uint8_t)lroundf(col_[2])};
-  float ey = LAYOUT_EYE_Y + e[P_DY] + gy_ - 3 * mouth_ + breathe * 3;
-  eye(LAYOUT_CX - e[P_GAP] + gx_, ey, -1, e, c, o);
-  eye(LAYOUT_CX + e[P_GAP] + gx_, ey, +1, e, c, o);
+  float ox = (float)ox_, oy = (float)oy_;
+  float ey = LAYOUT_EYE_Y + oy + e[P_DY] + gy_ - 3 * mouth_ + breathe * 3;
+  eye(LAYOUT_CX + ox - e[P_GAP] + gx_, ey, -1, e, c, o);
+  eye(LAYOUT_CX + ox + e[P_GAP] + gx_, ey, +1, e, c, o);
 
   float open = fmaxf2(e[P_OPEN], mouth_) * LAYOUT_TALK_OPEN_H * (1 - sleepT_);
   float mw = e[P_MOUTH_W] * (1 - 0.35f * sleepT_) * (1 - 0.15f * mouth_);
-  band(LAYOUT_CX + e[P_MOUTH_DX] + gx_ * 0.4f, LAYOUT_MOUTH_Y + e[P_DY] * 0.5f + gy_ * 0.3f, mw,
+  band(LAYOUT_CX + ox + e[P_MOUTH_DX] + gx_ * 0.4f, LAYOUT_MOUTH_Y + oy + e[P_DY] * 0.5f + gy_ * 0.3f, mw,
        e[P_CURVE] * (1 - sleepT_), LAYOUT_MOUTH_THICK, open, c, o);
 
   // Ring around the rim.
@@ -224,8 +245,8 @@ int FaceEngine::render(Prim* out) {
     Prim& p = add(PrimKind::Text);
     p.s[0] = 'z';
     p.size = 22 + 26 * t;
-    p.x = z.x0 + 50 * t + sinf(t * 6) * 6;
-    p.y = LAYOUT_EYE_Y - 60 - 80 * t;
+    p.x = z.x0 + ox + 50 * t + sinf(t * 6) * 6;
+    p.y = LAYOUT_EYE_Y + oy - 60 - 80 * t;
     setColor(p, c, sinf(kPi * t) * 0.8f);
   }
   return n_;

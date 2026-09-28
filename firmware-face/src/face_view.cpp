@@ -212,6 +212,11 @@ void setTestPattern(bool on) {
 }
 bool testPattern() { return test; }
 
+void repaintAll() {
+  prevBox = {0, 0, LCD_W - 1, LCD_H - 1};
+  lv_obj_invalidate(obj);
+}
+
 void setTouchDot(int x, int y) {
   dotX = x; dotY = y;
   if (test) lv_obj_invalidate(obj);

@@ -39,6 +39,7 @@ ROUTES: dict[str, tuple[str, ...] | None] = {
     "stream": ("camera",),
     "camera": ("camera",),    # picture size for the camera board
     "mouth": ("face",),       # mouth opening while he talks (from the speaker's bridge, delayed)
+    "gaze": ("face",),        # where the face's eyes look (console now, the camera later)
 }
 
 

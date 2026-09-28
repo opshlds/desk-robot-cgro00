@@ -13,7 +13,9 @@ NUM = ['eyeW', 'eyeH', 'radius', 'gap', 'dy', 'lid', 'slant', 'asym', 'lower',
        'mouthW', 'curve', 'open', 'mouthDx', 'gazeX', 'gazeY']
 RINGS = ['off', 'pulse', 'flash', 'spin']
 LAYOUT = ['cx', 'eyeY', 'mouthY', 'ringR', 'ringW', 'talkOpenH', 'mouthThick',
-          'gazeMaxX', 'gazeMaxY', 'morphMs', 'colorMs', 'brightAwake', 'brightAsleep']
+          'gazeMaxX', 'gazeMaxY', 'morphMs', 'colorMs', 'brightAwake', 'brightAsleep',
+          'gazeMs', 'gazeHoldMs', 'driftPx', 'driftAsleepPx', 'driftPeriodXS', 'driftPeriodYS',
+          'idleDimS', 'idleFadeMs', 'brightIdle', 'idleLid', 'offAfterS']
 
 
 def snake(name):

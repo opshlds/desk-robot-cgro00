@@ -53,6 +53,23 @@ textarea{width:100%;height:220px;margin-top:10px;font:12px/1.45 var(--mono);colo
 .note code{font-family:var(--mono);font-size:12px;color:var(--text)}
 .status{font:12px var(--mono);color:var(--accent);min-height:1.2em}
 @media (prefers-reduced-motion:reduce){h1 span{transition:none}}
+.m4{display:grid;grid-template-columns:minmax(0,220px) minmax(0,1fr) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:980px){.m4{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+@media (max-width:620px){.m4{grid-template-columns:minmax(0,1fr)}}
+.m4 h2{font:600 16px/1.2 var(--display);letter-spacing:.02em;margin:0;grid-column:1/-1}
+.m4 h2 small{font:13px var(--body);color:var(--muted);letter-spacing:0;margin-left:8px}
+.pad{position:relative;width:100%;aspect-ratio:20/13;background:#0b0e12;border:1px solid var(--line);border-radius:10px;touch-action:none;cursor:crosshair}
+.pad::before,.pad::after{content:"";position:absolute;background:var(--line)}
+.pad::before{left:50%;top:0;bottom:0;width:1px}.pad::after{top:50%;left:0;right:0;height:1px}
+.pad i{position:absolute;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;background:var(--accent);left:50%;top:50%;box-shadow:0 0 0 4px #0b0e12}
+.cmdline{font:12px var(--mono);color:var(--text);font-variant-numeric:tabular-nums;min-height:1.4em}
+.sl.w{grid-template-columns:104px minmax(0,1fr) 50px}
+.sl.w span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meter{height:6px;border-radius:3px;background:var(--panel2);overflow:hidden}
+.meter b{display:block;height:100%;width:0;background:var(--accent)}
+.kv{font:12px/1.7 var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.kv b{color:var(--text);font-weight:500}
+#wear{width:100%;max-width:233px;aspect-ratio:1;border-radius:50%;background:#000;display:block;border:1px solid var(--line)}
 </style>
 
 <div class="wrap">
@@ -69,6 +86,8 @@ textarea{width:100%;height:220px;margin-top:10px;font:12px/1.45 var(--mono);colo
         <span>state <b id="r-state">awake</b></span>
         <span>brightness <b id="r-bright">190</b>/255</span>
         <span>draws <b id="r-prims">0</b></span>
+        <span>drift <b id="r-drift">+0,+0</b> px</span>
+        <span>idle <b id="r-idle">0:00</b></span>
       </div>
     </section>
 
@@ -84,6 +103,7 @@ textarea{width:100%;height:220px;margin-top:10px;font:12px/1.45 var(--mono);colo
           <button id="b-talk" aria-pressed="false">Talking</button>
           <button id="b-idle" aria-pressed="true">Idle glances</button>
           <button id="b-blink">Blink</button>
+          <button id="b-follow" aria-pressed="false">Eyes follow pointer</button>
           <button id="b-demo">Play “Computer, what time is it?”</button>
         </div>
       </div>
@@ -100,7 +120,7 @@ textarea{width:100%;height:220px;margin-top:10px;font:12px/1.45 var(--mono);colo
           <div class="sliders" id="sliders"></div>
           <div class="row">
             <button id="b-copy">Copy all parameters</button>
-            <button id="b-reset">Reset to v1</button>
+            <button id="b-reset">Reset to defaults</button>
             <span class="status" id="copy-status"></span>
           </div>
           <textarea id="json" spellcheck="false" aria-label="Face parameters JSON"></textarea>
@@ -110,12 +130,54 @@ textarea{width:100%;height:220px;margin-top:10px;font:12px/1.45 var(--mono);colo
       </details>
     </section>
   </div>
+
+  <section class="panel m4" aria-label="M4: gaze, drift and idle dimming">
+    <h2>M4 · gaze, drift, idle dim<small>burn-in care for face-fw 0.3.0</small></h2>
+
+    <div class="group">
+      <div class="label">Gaze target</div>
+      <div class="pad" id="pad" role="slider" aria-label="Gaze target" tabindex="0"><i id="pad-dot"></i></div>
+      <div class="cmdline" id="gaze-cmd">gaze 0.00 0.00</div>
+      <div class="row"><button id="b-release">Release</button><button id="b-g-right">gaze 0.8 0</button><button id="b-g-left">gaze -0.8 0</button></div>
+      <p class="note">Drag in the pad. The eyes hold the target for <b id="o-hold">3.0</b> s, then idle glances resume. On the board: <code>gaze x y</code> in the brain console.</p>
+    </div>
+
+    <div class="group">
+      <div class="label">Time</div>
+      <div class="chips" id="speed"></div>
+      <p class="note">Speeds up only the slow clocks (drift and the idle timers) so you can see minutes in seconds.</p>
+      <div class="kv">
+        <div>state <b id="k-state">awake</b></div>
+        <div>idle <b id="k-idle">0:00</b> · dims at <b id="k-limit">3:00</b> · off at <b id="k-off">5:00</b></div>
+        <div>brightness <b id="k-target">190</b>/255</div>
+      </div>
+      <div class="meter" aria-hidden="true"><b id="k-bar"></b></div>
+      <div class="row"><button id="b-poke">Activity (poke)</button><button id="b-range" aria-pressed="false">Show drift range</button></div>
+      <div class="label" style="margin-top:6px">Wear map · how long each spot is lit</div>
+      <canvas id="wear" width="117" height="117" aria-label="Accumulated screen wear"></canvas>
+      <div class="kv">hottest spot <b id="k-peak">–</b> of full-on · over <b id="k-span">0:00</b> <span id="k-hint"></span></div>
+      <div class="row"><button id="b-wear" aria-pressed="false">Record wear</button><button id="b-wear-reset">Clear</button></div>
+    </div>
+
+    <div class="group">
+      <div class="label">Settings · layout in face_params.json</div>
+      <div class="sliders" id="m4-sliders" style="grid-template-columns:minmax(0,1fr)"></div>
+    </div>
+  </section>
 </div>
 
 <script>
 // HAIL-E face engine (reference implementation).
 // The firmware's src/face_engine.cpp is a line-for-line port of this file:
 // same state, same easing, same primitives. Change one, change the other.
+//
+// M4 (burn-in care + gaze): the whole face drifts a few pixels on a slow
+// Lissajous path (whole pixels only, the ring stays put); after a stretch with
+// no activity it dims (idleDimS -> at most brightIdle, drooping lids, no Z's)
+// and later turns the screen off (offAfterS -> 0; screenOff() is true).
+// lookAt(x, y, holdMs) holds a gaze target, then idle glances resume.
+// Activity = poke(): a new emotion, waking, talking, voice level, touch, gaze.
+// Falling asleep is not activity: the timer runs from the last interaction.
 //
 // step(dtMs, nowMs) advances the animation; render() returns a list of
 // primitives in painter's order on a black 466x466 screen:
@@ -151,22 +213,33 @@ textarea{width:100%;height:220px;margin-top:10px;font:12px/1.45 var(--mono);colo
       this.pop = 0; this.idle = true;
       this.zeds = [{a: false}, {a: false}, {a: false}]; this.nextZed = 0;
       this.bright = this.L.brightAwake;
+      this.slow = 1;                          // Face Lab only: speeds up drift + idle timers
+      this.driftA = 0; this.driftB = 0; this.ox = 0; this.oy = 0;
+      this.idleMs = 0; this.dimT = 0; this.offT = 0; this.now = 0;
     }
+    poke() { this.idleMs = 0; }
+    screenOff() { return this.offT > 0.99; }
     setParams(p) { this.P = p; this.L = p.layout; this.setEmotion(this.emotion, true); }
     setEmotion(name, quiet) {
       const e = this.P.emotions[name]; if (!e) return false;
-      if (name !== this.emotion && !quiet) { this.pop = 1; this.ringT = 1; }
+      if (name !== this.emotion && !quiet) { this.pop = 1; this.ringT = 1; this.poke(); }
       this.emotion = name;
       for (const k of NUM) this.tgt[k] = e[k];
       this.colT = hexRGB(e.color); this.ring = e.ring;
       this.gtx = e.gazeX; this.gty = e.gazeY;
       return true;
     }
-    setAsleep(on) { this.asleep = on; if (!on) { this.pop = 1; this.nextBlink = 0; } }
-    setTalking(on) { this.talking = on; if (!on) this.level = 0; }
-    setLevel(v) { this.level = clamp(v, 0, 1); }
+    setAsleep(on) { this.asleep = on; if (!on) { this.poke(); this.pop = 1; this.nextBlink = 0; } }
+    setTalking(on) { this.talking = on; this.poke(); if (!on) this.level = 0; }
+    setLevel(v) { this.level = clamp(v, 0, 1); if (this.level > 0.02) this.poke(); }
     doBlink() { if (this.blinkDir === 0) this.blinkDir = 1; }
-    lookAt(x, y) { this.gtx = clamp(x, -1, 1) * this.L.gazeMaxX; this.gty = clamp(y, -1, 1) * this.L.gazeMaxY; this.nextSaccade = this.now + 2500; }
+    // Gaze target, x/y in -1..1 (+x = screen right, +y = down),
+    // held for holdMs (default gazeHoldMs), then idle glances resume.
+    lookAt(x, y, holdMs) {
+      this.gtx = clamp(x, -1, 1) * this.L.gazeMaxX; this.gty = clamp(y, -1, 1) * this.L.gazeMaxY;
+      this.nextSaccade = this.now + (holdMs === undefined ? this.L.gazeHoldMs : holdMs); this.poke();
+    }
+    releaseGaze() { this.nextSaccade = this.now; }
 
     step(dt, now) {
       this.now = now;
@@ -179,13 +252,31 @@ textarea{width:100%;height:220px;margin-top:10px;font:12px/1.45 var(--mono);colo
       this.ringT *= Math.exp(-dt / (this.ring === 'flash' ? 380 : 900));
       this.ringPhase = (this.ringPhase + dt * 0.3) % 360;   // 1 turn / 1.2 s
 
+      // Idle: dim after idleDimS, screen off after offAfterS (0 = never).
+      // Slow fade down, quick return on any poke().
+      const sdt = dt * this.slow;
+      this.idleMs += sdt;
+      const dimTgt = L.idleDimS > 0 && this.idleMs >= L.idleDimS * 1000 ? 1 : 0;
+      const offTgt = L.offAfterS > 0 && this.idleMs >= L.offAfterS * 1000 ? 1 : 0;
+      this.dimT = ease(this.dimT, dimTgt, dt, dimTgt > this.dimT ? L.idleFadeMs : 150);
+      this.offT = ease(this.offT, offTgt, dt, offTgt > this.offT ? L.idleFadeMs : 150);
+      if (offTgt && this.offT > 0.99) this.offT = 1;
+
+      // Drift: slow Lissajous, whole pixels, larger while asleep.
+      const TAU = Math.PI * 2;
+      this.driftA = (this.driftA + sdt / (L.driftPeriodXS * 1000) * TAU) % TAU;
+      this.driftB = (this.driftB + sdt / (L.driftPeriodYS * 1000) * TAU) % TAU;
+      const amp = L.driftPx + (L.driftAsleepPx - L.driftPx) * this.sleepT;
+      this.ox = Math.round(amp * Math.sin(this.driftA));
+      this.oy = Math.round(amp * Math.sin(this.driftB));
+
       // Blink: 70 ms down, 120 ms up, every 2.2-6 s; sometimes a double.
       if (!this.asleep && this.blinkDir === 0 && now >= this.nextBlink) this.blinkDir = 1;
       if (this.blinkDir === 1) { this.blink += dt / 70; if (this.blink >= 1) { this.blink = 1; this.blinkDir = -1; } }
       else if (this.blinkDir === -1) {
         this.blink -= dt / 120;
         if (this.blink <= 0) { this.blink = 0; this.blinkDir = 0;
-          this.nextBlink = now + (R() < 0.15 ? 160 : 2200 + R() * 3800); }
+          this.nextBlink = now + (R() < 0.15 ? 160 : Math.floor(2200 + R() * 3800)); }   // whole ms, like the firmware
       }
 
       // Gaze: quick saccades around the emotion's resting gaze.
@@ -193,24 +284,26 @@ textarea{width:100%;height:220px;margin-top:10px;font:12px/1.45 var(--mono);colo
         const e = this.P.emotions[this.emotion];
         if (R() < 0.4) { this.gtx = e.gazeX; this.gty = e.gazeY; }
         else { this.gtx = e.gazeX + (R() * 2 - 1) * L.gazeMaxX * 0.7; this.gty = e.gazeY + (R() * 2 - 1) * L.gazeMaxY * 0.7; }
-        this.nextSaccade = now + 1200 + R() * 2800;
+        this.nextSaccade = now + 1200 + Math.floor(R() * 2800);
       }
-      this.gx = ease(this.gx, this.gtx * (1 - this.sleepT), dt, 55);
-      this.gy = ease(this.gy, this.gty * (1 - this.sleepT), dt, 55);
+      this.gx = ease(this.gx, this.gtx * (1 - this.sleepT), dt, L.gazeMs);
+      this.gy = ease(this.gy, this.gty * (1 - this.sleepT), dt, L.gazeMs);
 
       // Mouth follows the voice level: fast attack, slower release.
       const mt = this.talking ? this.level : 0;
       this.mouth = ease(this.mouth, mt, dt, mt > this.mouth ? 25 : 70);
 
       // Z's while asleep.
-      if (this.sleepT > 0.8 && now >= this.nextZed) {
+      if (this.sleepT > 0.8 && this.dimT < 0.5 && now >= this.nextZed) {
         const z = this.zeds.find(z => !z.a);
         if (z) { z.a = true; z.t = 0; z.x0 = L.cx + 50 + R() * 20; }
         this.nextZed = now + 1500;
       }
       for (const z of this.zeds) if (z.a) { z.t += dt / 3200; if (z.t >= 1) z.a = false; }
 
-      this.bright = Math.round(L.brightAwake + (L.brightAsleep - L.brightAwake) * this.sleepT);
+      const base = L.brightAwake + (L.brightAsleep - L.brightAwake) * this.sleepT;
+      const dimmed = Math.min(base, L.brightIdle);
+      this.bright = Math.round((base + (dimmed - base) * this.dimT) * (1 - this.offT));
     }
 
     // A curved band (mouth, closed eye): quads + round end caps.
@@ -240,7 +333,7 @@ textarea{width:100%;height:220px;margin-top:10px;font:12px/1.45 var(--mono);colo
       out.push({k: 'rrect', x, y, w, h, r: Math.min(e.radius * s, w / 2, h / 2), c, o});
       // Upper lid: black quad; its bottom edge passes the eye centre-line at
       // `lid` of the height, tilted by `slant` px (inner corner lower if > 0).
-      const lidBase = clamp(e.lid - side * e.asym, 0, 1);   // asym: left eye lower
+      const lidBase = clamp(e.lid - side * e.asym + L.idleLid * this.dimT * (1 - this.sleepT), 0, 1);   // asym: left eye lower; idle: drowsy
       if (sl < 0.5) {   // glint, kept below the lid line
         const gc = mix(c, [255, 255, 255], 0.55);
         const gy = Math.max(ey - h * 0.26, y + lidBase * h + Math.abs(e.slant) * 0.5 + w * 0.13);
@@ -271,13 +364,14 @@ textarea{width:100%;height:220px;margin-top:10px;font:12px/1.45 var(--mono);colo
       const breathe = Math.sin(this.breath) * this.sleepT;
       const o = 1 - 0.35 * this.sleepT * (0.5 + 0.5 * breathe);
       const c = this.col.map(Math.round);
-      const ey = L.eyeY + e.dy + this.gy - 3 * this.mouth + breathe * 3;
-      this.eye(out, L.cx - e.gap + this.gx, ey, -1, e, c, o);
-      this.eye(out, L.cx + e.gap + this.gx, ey, +1, e, c, o);
+      const ox = this.ox, oy = this.oy;
+      const ey = L.eyeY + oy + e.dy + this.gy - 3 * this.mouth + breathe * 3;
+      this.eye(out, L.cx + ox - e.gap + this.gx, ey, -1, e, c, o);
+      this.eye(out, L.cx + ox + e.gap + this.gx, ey, +1, e, c, o);
 
       const open = Math.max(e.open, this.mouth) * L.talkOpenH * (1 - this.sleepT);
       const mw = e.mouthW * (1 - 0.35 * this.sleepT) * (1 - 0.15 * this.mouth);
-      this.band(out, L.cx + e.mouthDx + this.gx * 0.4, L.mouthY + e.dy * 0.5 + this.gy * 0.3, mw,
+      this.band(out, L.cx + ox + e.mouthDx + this.gx * 0.4, L.mouthY + oy + e.dy * 0.5 + this.gy * 0.3, mw,
                 e.curve * (1 - this.sleepT), L.mouthThick, open, c, o);
 
       // Ring around the rim.
@@ -289,7 +383,7 @@ textarea{width:100%;height:220px;margin-top:10px;font:12px/1.45 var(--mono);colo
 
       for (const z of this.zeds) if (z.a) {
         const t = z.t, size = 22 + 26 * t;
-        out.push({k: 'text', s: 'z', x: z.x0 + 50 * t + Math.sin(t * 6) * 6, y: L.eyeY - 60 - 80 * t, size,
+        out.push({k: 'text', s: 'z', x: z.x0 + ox + 50 * t + Math.sin(t * 6) * 6, y: L.eyeY + oy - 60 - 80 * t, size,
                   c, o: Math.sin(Math.PI * t) * 0.8});
       }
       return out;
@@ -300,7 +394,7 @@ textarea{width:100%;height:220px;margin-top:10px;font:12px/1.45 var(--mono);colo
 
 </script>
 <script>
-const V1 = {"_about": "HAIL-E face v1. Single source for the preview page and firmware-face/include/face_params.h (tools/gen_params.py). Units: pixels on the 466x466 round screen, origin top-left, centre 233,233.", "layout": {"cx": 233, "eyeY": 200, "mouthY": 334, "ringR": 222, "ringW": 7, "talkOpenH": 58, "mouthThick": 11, "gazeMaxX": 20, "gazeMaxY": 13, "morphMs": 90, "colorMs": 220, "brightAwake": 190, "brightAsleep": 45}, "emotions": {"neutral": {"eyeW": 108, "eyeH": 150, "radius": 50, "gap": 88, "dy": 0, "lid": 0.0, "slant": 0, "asym": 0.0, "lower": 0.0, "mouthW": 72, "curve": 8, "open": 0.0, "mouthDx": 0, "gazeX": 0, "gazeY": 0, "color": "#45E3D2", "ring": "off"}, "happy": {"eyeW": 118, "eyeH": 132, "radius": 58, "gap": 90, "dy": -4, "lid": 0.0, "slant": 0, "asym": 0.0, "lower": 0.42, "mouthW": 112, "curve": 30, "open": 0.18, "mouthDx": 0, "gazeX": 0, "gazeY": -4, "color": "#FFC54D", "ring": "pulse"}, "sad": {"eyeW": 102, "eyeH": 132, "radius": 46, "gap": 84, "dy": 14, "lid": 0.14, "slant": -26, "asym": 0.0, "lower": 0.0, "mouthW": 84, "curve": -22, "open": 0.0, "mouthDx": 0, "gazeX": 0, "gazeY": 8, "color": "#5E8BFF", "ring": "off"}, "angry": {"eyeW": 114, "eyeH": 122, "radius": 34, "gap": 86, "dy": 6, "lid": 0.22, "slant": 30, "asym": 0.0, "lower": 0.0, "mouthW": 80, "curve": -12, "open": 0.0, "mouthDx": 0, "gazeX": 0, "gazeY": 0, "color": "#FF5A4A", "ring": "off"}, "surprised": {"eyeW": 124, "eyeH": 172, "radius": 62, "gap": 92, "dy": -8, "lid": 0.0, "slant": 0, "asym": 0.0, "lower": 0.0, "mouthW": 46, "curve": 0, "open": 0.85, "mouthDx": 0, "gazeX": 0, "gazeY": -6, "color": "#E6FCFF", "ring": "flash"}, "sleepy": {"eyeW": 112, "eyeH": 146, "radius": 50, "gap": 88, "dy": 8, "lid": 0.6, "slant": -8, "asym": 0.0, "lower": 0.0, "mouthW": 52, "curve": 2, "open": 0.0, "mouthDx": 0, "gazeX": 0, "gazeY": 6, "color": "#7FA6C9", "ring": "off"}, "thinking": {"eyeW": 104, "eyeH": 140, "radius": 46, "gap": 86, "dy": -2, "lid": 0.16, "slant": 8, "asym": 0.14, "lower": 0.0, "mouthW": 50, "curve": -4, "open": 0.0, "mouthDx": 28, "gazeX": 16, "gazeY": -11, "color": "#B28CFF", "ring": "spin"}}};
+const V1 = {"_about": "HAIL-E face v1. Single source for the preview page and firmware-face/include/face_params.h (tools/gen_params.py). Units: pixels on the 466x466 round screen, origin top-left, centre 233,233.", "layout": {"cx": 233, "eyeY": 200, "mouthY": 334, "ringR": 222, "ringW": 7, "talkOpenH": 58, "mouthThick": 11, "gazeMaxX": 20, "gazeMaxY": 13, "morphMs": 90, "colorMs": 220, "brightAwake": 190, "brightAsleep": 45, "gazeMs": 55, "gazeHoldMs": 3000, "driftPx": 6, "driftAsleepPx": 10, "driftPeriodXS": 420, "driftPeriodYS": 570, "idleDimS": 180, "idleFadeMs": 4000, "brightIdle": 30, "idleLid": 0.18, "offAfterS": 300}, "emotions": {"neutral": {"eyeW": 108, "eyeH": 150, "radius": 50, "gap": 88, "dy": 0, "lid": 0.0, "slant": 0, "asym": 0.0, "lower": 0.0, "mouthW": 72, "curve": 8, "open": 0.0, "mouthDx": 0, "gazeX": 0, "gazeY": 0, "color": "#45E3D2", "ring": "off"}, "happy": {"eyeW": 118, "eyeH": 132, "radius": 58, "gap": 90, "dy": -4, "lid": 0.0, "slant": 0, "asym": 0.0, "lower": 0.42, "mouthW": 112, "curve": 30, "open": 0.18, "mouthDx": 0, "gazeX": 0, "gazeY": -4, "color": "#FFC54D", "ring": "pulse"}, "sad": {"eyeW": 102, "eyeH": 132, "radius": 46, "gap": 84, "dy": 14, "lid": 0.14, "slant": -26, "asym": 0.0, "lower": 0.0, "mouthW": 84, "curve": -22, "open": 0.0, "mouthDx": 0, "gazeX": 0, "gazeY": 8, "color": "#5E8BFF", "ring": "off"}, "angry": {"eyeW": 114, "eyeH": 122, "radius": 34, "gap": 86, "dy": 6, "lid": 0.22, "slant": 30, "asym": 0.0, "lower": 0.0, "mouthW": 80, "curve": -12, "open": 0.0, "mouthDx": 0, "gazeX": 0, "gazeY": 0, "color": "#FF5A4A", "ring": "off"}, "surprised": {"eyeW": 124, "eyeH": 172, "radius": 62, "gap": 92, "dy": -8, "lid": 0.0, "slant": 0, "asym": 0.0, "lower": 0.0, "mouthW": 46, "curve": 0, "open": 0.85, "mouthDx": 0, "gazeX": 0, "gazeY": -6, "color": "#E6FCFF", "ring": "flash"}, "sleepy": {"eyeW": 112, "eyeH": 146, "radius": 50, "gap": 88, "dy": 8, "lid": 0.6, "slant": -8, "asym": 0.0, "lower": 0.0, "mouthW": 52, "curve": 2, "open": 0.0, "mouthDx": 0, "gazeX": 0, "gazeY": 6, "color": "#7FA6C9", "ring": "off"}, "thinking": {"eyeW": 104, "eyeH": 140, "radius": 46, "gap": 86, "dy": -2, "lid": 0.16, "slant": 8, "asym": 0.14, "lower": 0.0, "mouthW": 50, "curve": -4, "open": 0.0, "mouthDx": 28, "gazeX": 16, "gazeY": -11, "color": "#B28CFF", "ring": "spin"}}};
 let params = JSON.parse(JSON.stringify(V1));
 const face = new HaileFace.Face(params);
 const cv = document.getElementById('scr'), ctx = cv.getContext('2d');
@@ -322,6 +416,8 @@ $('b-sleep').onclick=()=>setSleep(!face.asleep);
 $('b-talk').onclick=()=>{ setTalk(!face.talking); log('> talk '+(face.talking?'on':'off')+'   (synthetic voice level)','cmd'); };
 $('b-idle').onclick=()=>{ face.idle=!face.idle; $('b-idle').setAttribute('aria-pressed',face.idle); };
 $('b-blink').onclick=()=>{ face.doBlink(); log('> blink','cmd'); };
+let follow=false;
+$('b-follow').onclick=()=>{ follow=!follow; $('b-follow').setAttribute('aria-pressed',follow); if(!follow) face.releaseGaze(); };
 
 // ---- synthetic voice level: syllables ~5/s with word gaps
 let talkT=0;
@@ -350,12 +446,12 @@ cv.addEventListener('pointerdown',e=>{ down={x:e.clientX,y:e.clientY,t:performan
 cv.addEventListener('pointerup',e=>{
   if(!down) return; const dx=e.clientX-down.x, dt=performance.now()-down.t; down=null;
   let g = Math.abs(dx)>50 ? (dx<0?'swipe_l':'swipe_r') : dt>600 ? 'long' : 'tap';
-  log('→ {"type":"touch","gesture":"'+g+'"}','brain');
+  log('→ {"type":"touch","gesture":"'+g+'"}','brain'); face.poke();
   if(g==='tap' && face.asleep){ setSleep(false,'← {"type":"asleep","on":false}'); emo('surprised'); timers.push(setTimeout(()=>emo('neutral'),1400)); }
   else if(g==='tap'){ face.doBlink(); }
   else if(g==='long' && !face.asleep){ emo('sleepy'); timers.push(setTimeout(()=>setSleep(true,'← {"type":"asleep","on":true}'),1500)); }
 });
-cv.addEventListener('pointermove',e=>{ if(down) return; const r=cv.getBoundingClientRect(); face.lookAt(((e.clientX-r.left)/r.width-0.5)*2.2, ((e.clientY-r.top)/r.height-0.5)*2.2); });
+cv.addEventListener('pointermove',e=>{ if(down || !follow) return; const r=cv.getBoundingClientRect(); face.lookAt(((e.clientX-r.left)/r.width-0.5)*2.2, ((e.clientY-r.top)/r.height-0.5)*2.2); });
 
 // ---- tuner
 const RANGES={eyeW:[60,160,1],eyeH:[60,200,1],radius:[4,90,1],gap:[60,120,1],dy:[-40,40,1],lid:[0,0.8,0.01],slant:[-50,50,1],asym:[0,0.4,0.01],lower:[0,0.7,0.01],mouthW:[20,160,1],curve:[-50,50,1],open:[0,1,0.01],mouthDx:[-60,60,1],gazeX:[-20,20,1],gazeY:[-13,13,1]};
@@ -370,10 +466,85 @@ $('t-color').addEventListener('input',e=>{ params.emotions[face.emotion].color=e
 $('t-ring').addEventListener('change',e=>{ params.emotions[face.emotion].ring=e.target.value; face.setParams(params); syncJSON(); });
 function loadTuner(){ const e=params.emotions[face.emotion]; $('t-name').textContent=face.emotion; for(const k in RANGES){ $('s-'+k).value=e[k]; $('o-'+k).textContent=e[k]; } $('t-color').value=e.color; $('t-ring').value=e.ring; }
 function syncJSON(){ $('json').value=JSON.stringify(params,null,1); try{localStorage.setItem('haile-face-params',$('json').value);}catch(_){} }
-$('b-apply').onclick=()=>{ try{ const p=JSON.parse($('json').value); params=p; face.setParams(p); paintChips(); loadTuner(); $('copy-status').textContent='Applied'; }catch(err){ $('copy-status').textContent='Not valid JSON: '+err.message; } };
-$('b-reset').onclick=()=>{ params=JSON.parse(JSON.stringify(V1)); face.setParams(params); paintChips(); loadTuner(); syncJSON(); $('copy-status').textContent='Back to v1'; };
+function withDefaults(p){ p.layout=Object.assign({},V1.layout,p.layout||{}); p.emotions=Object.assign({},JSON.parse(JSON.stringify(V1.emotions)),p.emotions||{}); return p; }
+$('b-apply').onclick=()=>{ try{ const p=withDefaults(JSON.parse($('json').value)); params=p; face.setParams(p); paintChips(); loadTuner(); loadM4(); syncJSON(); $('copy-status').textContent='Applied'; }catch(err){ $('copy-status').textContent='Not valid JSON: '+err.message; } };
+$('b-reset').onclick=()=>{ params=JSON.parse(JSON.stringify(V1)); face.setParams(params); paintChips(); loadTuner(); loadM4(); syncJSON(); $('copy-status').textContent='Back to defaults'; };
 $('b-copy').onclick=()=>{ const t=$('json').value; navigator.clipboard.writeText(t).then(()=>$('copy-status').textContent='Copied',()=>{ $('json').select(); $('copy-status').textContent='Selected: press Ctrl+C'; }); };
-try{ const saved=localStorage.getItem('haile-face-params'); if(saved){ params=JSON.parse(saved); face.setParams(params);} }catch(_){}
+try{ const saved=localStorage.getItem('haile-face-params'); if(saved){ params=withDefaults(JSON.parse(saved)); face.setParams(params);} }catch(_){}
+
+// ---- M4: gaze pad, time speed, idle readout, wear map, layout sliders
+const fmt=s=>{ s=Math.max(0,Math.floor(s)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };
+const pad=$('pad'), dot=$('pad-dot');
+function showGaze(x,y){ dot.style.left=(50+x*50)+'%'; dot.style.top=(50+y*50)+'%'; $('gaze-cmd').textContent='gaze '+x.toFixed(2)+' '+y.toFixed(2); }
+function gaze(x,y,logIt){ x=Math.max(-1,Math.min(1,x)); y=Math.max(-1,Math.min(1,y)); face.lookAt(x,y); showGaze(x,y);
+  if(logIt) log('← {"type":"gaze","x":'+x.toFixed(2)+',"y":'+y.toFixed(2)+'}','brain'); }
+let padDown=false;
+function padXY(e){ const r=pad.getBoundingClientRect(); return [((e.clientX-r.left)/r.width-0.5)*2, ((e.clientY-r.top)/r.height-0.5)*2]; }
+pad.addEventListener('pointerdown',e=>{ padDown=true; pad.setPointerCapture(e.pointerId); gaze(...padXY(e)); });
+pad.addEventListener('pointermove',e=>{ if(padDown) gaze(...padXY(e)); });
+pad.addEventListener('pointerup',e=>{ padDown=false; gaze(...padXY(e),true); });
+pad.addEventListener('keydown',e=>{ const k={ArrowLeft:[-.1,0],ArrowRight:[.1,0],ArrowUp:[0,-.1],ArrowDown:[0,.1]}[e.key]; if(!k) return; e.preventDefault();
+  const x=face.gtx/params.layout.gazeMaxX+k[0], y=face.gty/params.layout.gazeMaxY+k[1]; gaze(x,y,true); });
+$('b-release').onclick=()=>{ face.releaseGaze(); showGaze(0,0); log('← {"type":"gaze","release":true}','brain'); };
+$('b-g-right').onclick=()=>gaze(0.8,0,true);
+$('b-g-left').onclick=()=>gaze(-0.8,0,true);
+
+const SPEEDS=[1,20,100];
+SPEEDS.forEach(v=>{ const b=document.createElement('button'); b.textContent='×'+v; b.dataset.v=v; b.onclick=()=>{ face.slow=v; paintSpeed(); }; $('speed').appendChild(b); });
+function paintSpeed(){ $('speed').querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',+b.dataset.v===face.slow)); }
+paintSpeed();
+$('b-poke').onclick=()=>{ face.poke(); log('> activity (touch / speech / emotion)','cmd'); };
+let showRange=false;
+$('b-range').onclick=()=>{ showRange=!showRange; $('b-range').setAttribute('aria-pressed',showRange); };
+
+function m4Readout(){
+  const L=params.layout, end=L.offAfterS||L.idleDimS;
+  const st=face.offT>0.5?'screen off':((face.asleep?'asleep':'awake')+(face.dimT>0.5?', dimmed':''));
+  $('k-state').textContent=st; $('k-idle').textContent=fmt(face.idleMs/1000); $('r-idle').textContent=fmt(face.idleMs/1000);
+  $('k-limit').textContent=L.idleDimS>0?fmt(L.idleDimS):'never'; $('k-off').textContent=L.offAfterS>0?fmt(L.offAfterS):'never';
+  $('k-target').textContent=face.bright;
+  $('k-bar').style.width=(end>0?Math.min(100,face.idleMs/10/end):0)+'%';
+  $('r-drift').textContent=(face.ox>=0?'+':'')+face.ox+','+(face.oy>=0?'+':'')+face.oy;
+}
+
+// Wear map: average of how lit each 4x4 px block is, in simulated time.
+const W=117, wear=new Float32Array(W*W), wcv=$('wear'), wctx=wcv.getContext('2d');
+const tmp=document.createElement('canvas'); tmp.width=tmp.height=W; const tctx=tmp.getContext('2d',{willReadFrequently:true});
+let wearOn=false, wearT=0, wearAcc=0;
+function wearSample(sdt){
+  wearAcc+=sdt; if(wearAcc<200*face.slow) return;       // ~5 samples/s of real time
+  const w=wearAcc; wearAcc=0; wearT+=w;
+  tctx.drawImage(cv,0,0,W,W); const d=tctx.getImageData(0,0,W,W).data;
+  for(let i=0;i<W*W;i++){ const j=i*4; wear[i]+=Math.max(d[j],d[j+1],d[j+2])/255*w; }
+  paintWear();
+}
+function paintWear(){
+  const img=wctx.createImageData(W,W); let peak=0;
+  for(let i=0;i<W*W;i++){ const f=wearT?wear[i]/wearT:0; if(f>peak) peak=f; }
+  for(let i=0;i<W*W;i++){ const f=wearT?wear[i]/wearT:0, j=i*4;
+    img.data[j]=Math.min(255,f*2*255); img.data[j+1]=Math.min(255,f*f*255); img.data[j+2]=Math.min(255,f*0.4*255); img.data[j+3]=255; }
+  wctx.putImageData(img,0,0);
+  $('k-peak').textContent=Math.round(peak*100)+'%'; $('k-span').textContent=fmt(wearT/1000);
+  $('k-hint').textContent=wearT>0&&wearT<3600000?'(run ×100 for a few minutes)':'';
+}
+$('b-wear').onclick=()=>{ wearOn=!wearOn; $('b-wear').setAttribute('aria-pressed',wearOn); };
+$('b-wear-reset').onclick=()=>{ wear.fill(0); wearT=0; wearAcc=0; paintWear(); };
+paintWear();
+
+const M4R={
+  gazeMaxX:['gaze reach x',4,40,1,'px'], gazeMaxY:['gaze reach y',2,30,1,'px'], gazeMs:['gaze speed',20,300,5,'ms'], gazeHoldMs:['gaze hold',500,10000,100,'ms'],
+  driftPx:['drift awake',0,16,1,'px'], driftAsleepPx:['drift asleep',0,20,1,'px'], driftPeriodXS:['drift period x',60,1200,10,'s'], driftPeriodYS:['drift period y',60,1200,10,'s'],
+  idleDimS:['dim after',0,1800,10,'s'], brightIdle:['dim bright',5,190,1,'/255'], idleLid:['idle lids',0,0.5,0.01,''], idleFadeMs:['fade time',300,15000,100,'ms'],
+  offAfterS:['off after',0,3600,10,'s']
+};
+Object.entries(M4R).forEach(([k,[name,lo,hi,st,u]])=>{
+  const id='m-'+k, row=document.createElement('label'); row.className='sl w'; row.htmlFor=id; row.title=k+(u?' ('+u+')':'')+(k==='idleDimS'||k==='offAfterS'?' · 0 = never':'');
+  row.innerHTML=`<span>${name}</span><input type="range" id="${id}" min="${lo}" max="${hi}" step="${st}"><output id="mo-${k}"></output>`;
+  $('m4-sliders').appendChild(row);
+  row.querySelector('input').addEventListener('input',ev=>{ params.layout[k]=+ev.target.value; face.setParams(params); showM4(k); syncJSON(); });
+});
+function showM4(k){ const v=params.layout[k], u=M4R[k][4]; $('mo-'+k).textContent=(u==='s'&&v>=60?fmt(v):v+(u==='s'?'s':'')); if(k==='gazeHoldMs') $('o-hold').textContent=(v/1000).toFixed(1); }
+function loadM4(){ for(const k in M4R){ $('m-'+k).value=params.layout[k]; showM4(k); } }
 
 // ---- renderer (mirrors the LVGL draw calls)
 function rgba(c,o){ return `rgba(${c[0]},${c[1]},${c[2]},${Math.max(0,Math.min(1,o))})`; }
@@ -391,6 +562,12 @@ function draw(prims, bright){
   const b=Math.min(1,bright/params.layout.brightAwake);
   if(b<1){ ctx.fillStyle=`rgba(0,0,0,${1-b})`; ctx.fillRect(0,0,466,466); }
 }
+function drawRange(){
+  const L=params.layout, a=L.driftPx+(L.driftAsleepPx-L.driftPx)*face.sleepT, x=L.cx, y=(L.eyeY+L.mouthY)/2;
+  ctx.save(); ctx.strokeStyle='rgba(255,255,255,.55)'; ctx.setLineDash([3,3]); ctx.lineWidth=1;
+  ctx.strokeRect(x-a-.5,y-a-.5,2*a+1,2*a+1); ctx.setLineDash([]);
+  ctx.fillStyle='#fff'; ctx.fillRect(x+face.ox-1.5,y+face.oy-1.5,3,3); ctx.restore();
+}
 let last=performance.now(), t0=last;
 const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 function frame(now){
@@ -401,9 +578,13 @@ function frame(now){
   draw(prims, face.bright);
   $('r-emo').textContent=face.emotion; $('r-state').textContent=face.asleep?'asleep':(face.talking?'talking':'awake');
   $('r-bright').textContent=face.bright; $('r-prims').textContent=prims.length;
+  if(wearOn) wearSample(dt*face.slow);
+  if(showRange) drawRange();
+  if(face.bright===0){ ctx.fillStyle='rgba(140,150,166,.5)'; ctx.font='500 15px "IBM Plex Mono", monospace'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('screen off · tap to wake',233,233); }
+  m4Readout();
   requestAnimationFrame(frame);
 }
 if(reduce) face.idle=false, $('b-idle').setAttribute('aria-pressed',false);
-emo('neutral'); syncJSON(); log('face-fw 0.1.0 (preview)  type "help" on the real board');
+emo('neutral'); loadM4(); syncJSON(); log('face-fw 0.3.0 (preview)  type "help" on the real board');
 requestAnimationFrame(frame);
 </script>

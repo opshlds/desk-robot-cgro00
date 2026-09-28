@@ -32,7 +32,16 @@ class FaceEngine {
   bool talking() const { return talking_; }
   void setLevel(float v);                       // voice level 0..1
   void blink() { if (blinkDir_ == 0) blinkDir_ = 1; }
-  void lookAt(float x, float y);                // -1..1 each
+  // Gaze target, -1..1 each (+x screen right, +y down), held for holdMs
+  // (default gazeHoldMs), then idle glances resume.
+  void lookAt(float x, float y, int32_t holdMs = -1);
+  void releaseGaze() { nextSaccade_ = now_; }
+  // M4: activity resets the idle timer (dim after idleDimS, off after offAfterS).
+  void poke() { idleMs_ = 0; }
+  bool screenOff() const { return offT_ > 0.99f; }
+  uint32_t idleMs() const { return (uint32_t)idleMs_; }
+  int driftX() const { return ox_; }
+  int driftY() const { return oy_; }
   void setIdle(bool on) { idle_ = on; }
   bool idle() const { return idle_; }
 
@@ -61,6 +70,8 @@ class FaceEngine {
   struct Zed { bool a = false; float t = 0, x0 = 0; } zeds_[3];
   uint32_t nextZed_ = 0, now_ = 0;
   uint8_t bright_ = LAYOUT_BRIGHT_AWAKE;
+  float driftA_ = 0, driftB_ = 0; int ox_ = 0, oy_ = 0;
+  float idleMs_ = 0, dimT_ = 0, offT_ = 0;
 
   Prim* out_ = nullptr; int n_ = 0;
 };

@@ -2,6 +2,14 @@
 // The firmware's src/face_engine.cpp is a line-for-line port of this file:
 // same state, same easing, same primitives. Change one, change the other.
 //
+// M4 (burn-in care + gaze): the whole face drifts a few pixels on a slow
+// Lissajous path (whole pixels only, the ring stays put); after a stretch with
+// no activity it dims (idleDimS -> at most brightIdle, drooping lids, no Z's)
+// and later turns the screen off (offAfterS -> 0; screenOff() is true).
+// lookAt(x, y, holdMs) holds a gaze target, then idle glances resume.
+// Activity = poke(): a new emotion, waking, talking, voice level, touch, gaze.
+// Falling asleep is not activity: the timer runs from the last interaction.
+//
 // step(dtMs, nowMs) advances the animation; render() returns a list of
 // primitives in painter's order on a black 466x466 screen:
 //   {k:'rrect', x,y,w,h,r, c,o}   filled rounded rect (c = [r,g,b], o = 0..1)
@@ -36,22 +44,33 @@
       this.pop = 0; this.idle = true;
       this.zeds = [{a: false}, {a: false}, {a: false}]; this.nextZed = 0;
       this.bright = this.L.brightAwake;
+      this.slow = 1;                          // Face Lab only: speeds up drift + idle timers
+      this.driftA = 0; this.driftB = 0; this.ox = 0; this.oy = 0;
+      this.idleMs = 0; this.dimT = 0; this.offT = 0; this.now = 0;
     }
+    poke() { this.idleMs = 0; }
+    screenOff() { return this.offT > 0.99; }
     setParams(p) { this.P = p; this.L = p.layout; this.setEmotion(this.emotion, true); }
     setEmotion(name, quiet) {
       const e = this.P.emotions[name]; if (!e) return false;
-      if (name !== this.emotion && !quiet) { this.pop = 1; this.ringT = 1; }
+      if (name !== this.emotion && !quiet) { this.pop = 1; this.ringT = 1; this.poke(); }
       this.emotion = name;
       for (const k of NUM) this.tgt[k] = e[k];
       this.colT = hexRGB(e.color); this.ring = e.ring;
       this.gtx = e.gazeX; this.gty = e.gazeY;
       return true;
     }
-    setAsleep(on) { this.asleep = on; if (!on) { this.pop = 1; this.nextBlink = 0; } }
-    setTalking(on) { this.talking = on; if (!on) this.level = 0; }
-    setLevel(v) { this.level = clamp(v, 0, 1); }
+    setAsleep(on) { this.asleep = on; if (!on) { this.poke(); this.pop = 1; this.nextBlink = 0; } }
+    setTalking(on) { this.talking = on; this.poke(); if (!on) this.level = 0; }
+    setLevel(v) { this.level = clamp(v, 0, 1); if (this.level > 0.02) this.poke(); }
     doBlink() { if (this.blinkDir === 0) this.blinkDir = 1; }
-    lookAt(x, y) { this.gtx = clamp(x, -1, 1) * this.L.gazeMaxX; this.gty = clamp(y, -1, 1) * this.L.gazeMaxY; this.nextSaccade = this.now + 2500; }
+    // Gaze target, x/y in -1..1 (+x = screen right, +y = down),
+    // held for holdMs (default gazeHoldMs), then idle glances resume.
+    lookAt(x, y, holdMs) {
+      this.gtx = clamp(x, -1, 1) * this.L.gazeMaxX; this.gty = clamp(y, -1, 1) * this.L.gazeMaxY;
+      this.nextSaccade = this.now + (holdMs === undefined ? this.L.gazeHoldMs : holdMs); this.poke();
+    }
+    releaseGaze() { this.nextSaccade = this.now; }
 
     step(dt, now) {
       this.now = now;
@@ -64,13 +83,31 @@
       this.ringT *= Math.exp(-dt / (this.ring === 'flash' ? 380 : 900));
       this.ringPhase = (this.ringPhase + dt * 0.3) % 360;   // 1 turn / 1.2 s
 
+      // Idle: dim after idleDimS, screen off after offAfterS (0 = never).
+      // Slow fade down, quick return on any poke().
+      const sdt = dt * this.slow;
+      this.idleMs += sdt;
+      const dimTgt = L.idleDimS > 0 && this.idleMs >= L.idleDimS * 1000 ? 1 : 0;
+      const offTgt = L.offAfterS > 0 && this.idleMs >= L.offAfterS * 1000 ? 1 : 0;
+      this.dimT = ease(this.dimT, dimTgt, dt, dimTgt > this.dimT ? L.idleFadeMs : 150);
+      this.offT = ease(this.offT, offTgt, dt, offTgt > this.offT ? L.idleFadeMs : 150);
+      if (offTgt && this.offT > 0.99) this.offT = 1;
+
+      // Drift: slow Lissajous, whole pixels, larger while asleep.
+      const TAU = Math.PI * 2;
+      this.driftA = (this.driftA + sdt / (L.driftPeriodXS * 1000) * TAU) % TAU;
+      this.driftB = (this.driftB + sdt / (L.driftPeriodYS * 1000) * TAU) % TAU;
+      const amp = L.driftPx + (L.driftAsleepPx - L.driftPx) * this.sleepT;
+      this.ox = Math.round(amp * Math.sin(this.driftA));
+      this.oy = Math.round(amp * Math.sin(this.driftB));
+
       // Blink: 70 ms down, 120 ms up, every 2.2-6 s; sometimes a double.
       if (!this.asleep && this.blinkDir === 0 && now >= this.nextBlink) this.blinkDir = 1;
       if (this.blinkDir === 1) { this.blink += dt / 70; if (this.blink >= 1) { this.blink = 1; this.blinkDir = -1; } }
       else if (this.blinkDir === -1) {
         this.blink -= dt / 120;
         if (this.blink <= 0) { this.blink = 0; this.blinkDir = 0;
-          this.nextBlink = now + (R() < 0.15 ? 160 : 2200 + R() * 3800); }
+          this.nextBlink = now + (R() < 0.15 ? 160 : Math.floor(2200 + R() * 3800)); }   // whole ms, like the firmware
       }
 
       // Gaze: quick saccades around the emotion's resting gaze.
@@ -78,24 +115,26 @@
         const e = this.P.emotions[this.emotion];
         if (R() < 0.4) { this.gtx = e.gazeX; this.gty = e.gazeY; }
         else { this.gtx = e.gazeX + (R() * 2 - 1) * L.gazeMaxX * 0.7; this.gty = e.gazeY + (R() * 2 - 1) * L.gazeMaxY * 0.7; }
-        this.nextSaccade = now + 1200 + R() * 2800;
+        this.nextSaccade = now + 1200 + Math.floor(R() * 2800);
       }
-      this.gx = ease(this.gx, this.gtx * (1 - this.sleepT), dt, 55);
-      this.gy = ease(this.gy, this.gty * (1 - this.sleepT), dt, 55);
+      this.gx = ease(this.gx, this.gtx * (1 - this.sleepT), dt, L.gazeMs);
+      this.gy = ease(this.gy, this.gty * (1 - this.sleepT), dt, L.gazeMs);
 
       // Mouth follows the voice level: fast attack, slower release.
       const mt = this.talking ? this.level : 0;
       this.mouth = ease(this.mouth, mt, dt, mt > this.mouth ? 25 : 70);
 
       // Z's while asleep.
-      if (this.sleepT > 0.8 && now >= this.nextZed) {
+      if (this.sleepT > 0.8 && this.dimT < 0.5 && now >= this.nextZed) {
         const z = this.zeds.find(z => !z.a);
         if (z) { z.a = true; z.t = 0; z.x0 = L.cx + 50 + R() * 20; }
         this.nextZed = now + 1500;
       }
       for (const z of this.zeds) if (z.a) { z.t += dt / 3200; if (z.t >= 1) z.a = false; }
 
-      this.bright = Math.round(L.brightAwake + (L.brightAsleep - L.brightAwake) * this.sleepT);
+      const base = L.brightAwake + (L.brightAsleep - L.brightAwake) * this.sleepT;
+      const dimmed = Math.min(base, L.brightIdle);
+      this.bright = Math.round((base + (dimmed - base) * this.dimT) * (1 - this.offT));
     }
 
     // A curved band (mouth, closed eye): quads + round end caps.
@@ -125,7 +164,7 @@
       out.push({k: 'rrect', x, y, w, h, r: Math.min(e.radius * s, w / 2, h / 2), c, o});
       // Upper lid: black quad; its bottom edge passes the eye centre-line at
       // `lid` of the height, tilted by `slant` px (inner corner lower if > 0).
-      const lidBase = clamp(e.lid - side * e.asym, 0, 1);   // asym: left eye lower
+      const lidBase = clamp(e.lid - side * e.asym + L.idleLid * this.dimT * (1 - this.sleepT), 0, 1);   // asym: left eye lower; idle: drowsy
       if (sl < 0.5) {   // glint, kept below the lid line
         const gc = mix(c, [255, 255, 255], 0.55);
         const gy = Math.max(ey - h * 0.26, y + lidBase * h + Math.abs(e.slant) * 0.5 + w * 0.13);
@@ -156,13 +195,14 @@
       const breathe = Math.sin(this.breath) * this.sleepT;
       const o = 1 - 0.35 * this.sleepT * (0.5 + 0.5 * breathe);
       const c = this.col.map(Math.round);
-      const ey = L.eyeY + e.dy + this.gy - 3 * this.mouth + breathe * 3;
-      this.eye(out, L.cx - e.gap + this.gx, ey, -1, e, c, o);
-      this.eye(out, L.cx + e.gap + this.gx, ey, +1, e, c, o);
+      const ox = this.ox, oy = this.oy;
+      const ey = L.eyeY + oy + e.dy + this.gy - 3 * this.mouth + breathe * 3;
+      this.eye(out, L.cx + ox - e.gap + this.gx, ey, -1, e, c, o);
+      this.eye(out, L.cx + ox + e.gap + this.gx, ey, +1, e, c, o);
 
       const open = Math.max(e.open, this.mouth) * L.talkOpenH * (1 - this.sleepT);
       const mw = e.mouthW * (1 - 0.35 * this.sleepT) * (1 - 0.15 * this.mouth);
-      this.band(out, L.cx + e.mouthDx + this.gx * 0.4, L.mouthY + e.dy * 0.5 + this.gy * 0.3, mw,
+      this.band(out, L.cx + ox + e.mouthDx + this.gx * 0.4, L.mouthY + oy + e.dy * 0.5 + this.gy * 0.3, mw,
                 e.curve * (1 - this.sleepT), L.mouthThick, open, c, o);
 
       // Ring around the rim.
@@ -174,7 +214,7 @@
 
       for (const z of this.zeds) if (z.a) {
         const t = z.t, size = 22 + 26 * t;
-        out.push({k: 'text', s: 'z', x: z.x0 + 50 * t + Math.sin(t * 6) * 6, y: L.eyeY - 60 - 80 * t, size,
+        out.push({k: 'text', s: 'z', x: z.x0 + ox + 50 * t + Math.sin(t * 6) * 6, y: L.eyeY + oy - 60 - 80 * t, size,
                   c, o: Math.sin(Math.PI * t) * 0.8});
       }
       return out;

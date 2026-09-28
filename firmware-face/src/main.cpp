@@ -2,8 +2,11 @@
 //
 // Boots into a 3 s check screen (panel name, colour thirds, edge ring), then
 // the face. M2: joins WiFi and connects to the brain on ai1 as role "face";
-// the brain drives emotions, sleep and (M3) the mouth. Without the brain,
-// the USB serial console (115200, type "help") drives it.
+// the brain drives emotions, sleep, (M3) the mouth and (M4) the gaze. M4 also
+// cares for the AMOLED: the face drifts a few pixels, dims after 3 min without
+// activity and switches the panel off after 5 min; a touch or any brain
+// message brings it back. Without the brain, the USB serial console
+// (115200, type "help") drives it.
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -95,6 +98,7 @@ float voiceLevel(float dtMs) {
 // (tap wakes him, long press puts him to sleep). Without it: do the same
 // locally so the face still responds.
 void onGesture(Gesture g) {
+  face.poke();                    // any touch is activity (and wakes a dark screen)
   String json = String("{\"type\":\"touch\",\"gesture\":\"") + touch::name(g) + "\"}";
   Serial.printf("-> %s%s\r\n", json.c_str(), brainlink::connected() ? "" : "  (no brain: handled here)");
   if (face_view::testPattern()) return;
@@ -132,6 +136,13 @@ void onBrain(const char* type, const char* arg) {
     face.setTalking(true);
     face.setLevel(atof(arg));
     mouthUntil = millis() + 300;
+  } else if (!strcmp(type, "gaze")) {     // M4: "x y hold_ms" or "release"
+    if (!strcmp(arg, "release")) { face.releaseGaze(); face.poke(); }
+    else {
+      float x = 0, y = 0; long hold = -1;
+      sscanf(arg, "%f %f %ld", &x, &y, &hold);
+      face.lookAt(x, y, (int32_t)hold);
+    }
   }
 }
 
@@ -141,7 +152,8 @@ void help() {
       "commands:\r\n"
       "  emo <neutral|happy|sad|angry|surprised|sleepy|thinking>\r\n"
       "  sleep on|off        talk on|off        level <0..1>\r\n"
-      "  blink               look <x> <y>  (-1..1)   idle on|off\r\n"
+      "  blink               look <x> <y> [ms] | look off  (-1..1)   idle on|off\r\n"
+      "  poke                (counts as activity: wakes a dimmed or dark screen)\r\n"
       "  demo                (plays the wake / think / answer / sleep sequence)\r\n"
       "  bright <0..255>|auto\r\n"
       "  test on|off         (check screen: edge ring, colour thirds, touch dot)\r\n"
@@ -157,6 +169,8 @@ void info() {
                 (unsigned long)(ESP.getFreeHeap() / 1024), (unsigned long)(ESP.getFreePsram() / 1024),
                 (unsigned long)(ESP.getPsramSize() / 1024), display::brightness());
   Serial.printf("emotion %s  asleep %d  talking %d\r\n", face.emotion(), face.asleep(), face.talking());
+  Serial.printf("idle %lu s (dim at %d, off at %d)  screen %s  drift %+d,%+d px\r\n", (unsigned long)(face.idleMs() / 1000),
+                LAYOUT_IDLE_DIM_S, LAYOUT_OFF_AFTER_S, display::powered() ? "on" : "OFF", face.driftX(), face.driftY());
   brainlink::status();
 }
 
@@ -182,10 +196,15 @@ void command(String line) {
   else if (cmd == "talk") { if (onOff(arg, b)) setTalk(b); }
   else if (cmd == "level") { synthTalk = false; face.setTalking(true); face.setLevel(arg.toFloat()); }
   else if (cmd == "blink") face.blink();
-  else if (cmd == "look") {
-    int sp2 = arg.indexOf(' ');
-    face.lookAt(arg.substring(0, sp2).toFloat(), sp2 < 0 ? 0 : arg.substring(sp2 + 1).toFloat());
+  else if (cmd == "look" || cmd == "gaze") {
+    if (arg == "off") { face.releaseGaze(); face.poke(); }
+    else {
+      float x = 0, y = 0; long hold = -1;
+      sscanf(arg.c_str(), "%f %f %ld", &x, &y, &hold);
+      face.lookAt(x, y, (int32_t)hold);
+    }
   }
+  else if (cmd == "poke") face.poke();
   else if (cmd == "idle") { if (onOff(arg, b)) face.setIdle(b); }
   else if (cmd == "demo") demo();
   else if (cmd == "bright") {
@@ -225,9 +244,15 @@ void command(String line) {
 
 void readConsole() {
   static String buf;
+  static bool escape = false;   // inside an ANSI escape sequence (arrow keys etc.)
   // Enter may arrive as \r (PuTTY), \n or \r\n (Arduino / PlatformIO monitors).
   while (Serial.available()) {
     char ch = (char)Serial.read();
+    if (escape) {                                // ESC [ ... ends with a letter or ~
+      if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '~') escape = false;
+      continue;
+    }
+    if (ch == 27) { escape = true; continue; }
     if (ch == '\r' || ch == '\n') {
       buf.trim();
       if (buf.length()) {
@@ -239,6 +264,10 @@ void readConsole() {
       buf = "";
     } else if (ch == 8 || ch == 127) {           // backspace
       if (buf.length()) buf.remove(buf.length() - 1);
+    } else if (ch < 32 || ch > 126) {
+      // Other control characters (PuTTY sends Ctrl-V as 0x16, arrow keys as
+      // escape sequences) would end up in commands and saved settings: drop them.
+      continue;
     } else if (buf.length() < 240) {             // room for long tokens / passwords
       buf += ch;
     }
@@ -311,9 +340,20 @@ void loop() {
     lastStep = now;
     if (synthTalk) face.setLevel(voiceLevel(dt));
     face.step(dt, now);
-    face_view::frame();
-    if (display::brightnessOverride() < 0 && !face_view::testPattern()) display::setBrightness(face.brightness());
-    frames++;
+    // M4: after offAfterS without activity the panel is switched off and
+    // nothing is drawn; the engine keeps running so a poke brings it back.
+    bool dark = face.screenOff() && display::brightnessOverride() < 0 && !face_view::testPattern();
+    if (dark) {
+      display::setPower(false);
+    } else {
+      if (!display::powered()) {        // waking from screen-off: the panel slept, redraw it all
+        display::setPower(true);
+        face_view::repaintAll();
+      }
+      face_view::frame();
+      if (display::brightnessOverride() < 0 && !face_view::testPattern()) display::setBrightness(face.brightness());
+      frames++;
+    }
   }
 
   int tx, ty;

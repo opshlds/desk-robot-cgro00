@@ -170,6 +170,58 @@ class Mouth(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(brainconfig.MOUTH_DELAY_SECONDS, 0.25)
 
 
+class Gaze(unittest.IsolatedAsyncioTestCase):
+    """M4: `gaze` goes only to the face; the console command builds it."""
+
+    async def asyncSetUp(self):
+        brainmain.main_loop = asyncio.get_running_loop()
+        brainmain.devices = brainmain.Registry()
+        brainmain.current_emotion = "neutral"
+        self.server = await websockets.serve(brainmain.handle_robot, "127.0.0.1", PORT)
+        self.speaker = await connect(f"ws://127.0.0.1:{PORT}")
+        await self.speaker.send(json.dumps({"type": "hello", "who": "xiaozhi-bridge",
+                                            "token": os.environ["ROBOT_TOKEN"], "roles": ["mic", "speaker"]}))
+        self.face = await connect(f"ws://127.0.0.1:{PORT}")
+        await self.face.send(json.dumps({"type": "hello", "who": "amoled-face", "fw": "0.3.0",
+                                         "token": os.environ["ROBOT_TOKEN"], "roles": ["face"]}))
+        await recv_json(self.face)                              # the current emotion
+        await asyncio.sleep(0.1)
+        while True:                                             # whatever the speaker got on connect
+            try:
+                await asyncio.wait_for(self.speaker.recv(), 0.1)
+            except asyncio.TimeoutError:
+                break
+
+    async def asyncTearDown(self):
+        await self.speaker.close()
+        await self.face.close()
+        self.server.close()
+        await self.server.wait_closed()
+
+    async def test_console_gaze_reaches_only_the_face(self):
+        await brainmain.handle_console_line("gaze 0.8 0")
+        self.assertEqual(await recv_json(self.face), {"type": "gaze", "x": 0.8, "y": 0.0})
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(self.speaker.recv(), 0.3)
+
+    async def test_hold_clamp_and_release(self):
+        await brainmain.handle_console_line("gaze -3 0.456 5000")
+        self.assertEqual(await recv_json(self.face), {"type": "gaze", "x": -1.0, "y": 0.46, "hold_ms": 5000})
+        await brainmain.handle_console_line("gaze off")
+        self.assertEqual(await recv_json(self.face), {"type": "gaze", "release": True})
+
+    async def test_bad_input_sends_nothing(self):
+        for bad in ("gaze", "gaze left", "gaze 0.5", "gaze nan 0", "gaze 0 0 5", "gaze 0 0 99999", "gaze 1 2 3 4"):
+            await brainmain.handle_console_line(bad)
+        with self.assertRaises(asyncio.TimeoutError):
+            await recv_json(self.face, timeout=0.3)
+
+    async def test_no_face(self):
+        await self.face.close()
+        await asyncio.sleep(0.1)
+        self.assertFalse(await brainmain.set_gaze(0.5, 0))
+
+
 class SleepWords(unittest.TestCase):
     def test_sleep_phrases(self):
         for said in ["Go to sleep.", "Rocky, go to sleep", "Time for bed!", "You can fall asleep now"]:

@@ -21,7 +21,7 @@ it concerns (`server/brain/devices.py`, ROUTES):
 | `mic` | mic |
 | `stream`, `camera` | camera |
 | `pan`, `tilt`, `glance` | neck |
-| `mouth` | face |
+| `mouth`, `gaze` | face |
 | `emotion`, `asleep` | every board |
 
 and only accepts board messages from the matching role: mic audio from the
@@ -71,6 +71,8 @@ the latest frame for the live-view page, the face tracker, and the language mode
 {"type": "stream", "on": true, "fps": 10}   // start/stop the camera stream, set rate
 {"type": "camera", "res": "svga"} // camera: picture size qvga | vga | svga | hd (the board saves it and reports back)
 {"type": "mouth", "level": 0.62}  // face: open the mouth this far (0 = closed); it closes by itself 300 ms after the last one
+{"type": "gaze", "x": 0.8, "y": 0.0, "hold_ms": 3000}  // face: look there (-1..1, +x screen right, +y down); hold_ms optional
+{"type": "gaze", "release": true} // face: go back to idle glances now
 ```
 
 The server sends `stream on` at `CAMERA_FPS` when the robot connects. The
@@ -109,6 +111,27 @@ knows when each bit of it plays. For the Yahboom that is the bridge
 
 The face (firmware 0.2.x) eases toward each level (25 ms attack / 70 ms
 release) and closes its mouth 300 ms after the last message.
+
+## Gaze and screen care (face screen, M4)
+
+`gaze` points the face's eyes: x and y from −1 to 1 (+x = screen right,
++y = down), scaled to the face's gaze reach (about 20 × 13 px). The face
+holds the target for `hold_ms` (default 3 s, `gazeHoldMs` in
+`firmware-face/design/face_params.json`), then goes back to its idle glances;
+`release` ends it at once. The brain console sends it with `gaze <x> <y> [ms]`
+and `gaze off`; later the camera's face tracker will send it.
+
+The face (firmware 0.3.0) also looks after the AMOLED on its own:
+- The whole face drifts a few pixels on a slow path (±6 px awake, ±10 px
+  asleep, a 7 and 9.5 minute cycle), one pixel step at a time. The ring stays put.
+- After 3 minutes with no activity it dims (to 30/255, or the sleep level if
+  that is lower) and the eyelids droop a little; after 5 minutes the panel
+  is switched off.
+- Activity is a touch, a new `emotion`, waking up (`asleep` false), a
+  `mouth` level or a `gaze`. Falling asleep is not activity, so the timer
+  runs from the last real interaction.
+
+All of these are in `face_params.json` (`layout`) and can be previewed in Face Lab.
 
 Firmware side: `firmware/src/link.cpp` maps each server message onto the
 same text commands the USB console uses (`emo`, `pan`, `tilt`), so both

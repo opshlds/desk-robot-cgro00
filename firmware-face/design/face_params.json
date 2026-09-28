@@ -6,7 +6,11 @@
     "talkOpenH": 58, "mouthThick": 11,
     "gazeMaxX": 20, "gazeMaxY": 13,
     "morphMs": 90, "colorMs": 220,
-    "brightAwake": 190, "brightAsleep": 45
+    "brightAwake": 190, "brightAsleep": 45,
+    "gazeMs": 55, "gazeHoldMs": 3000,
+    "driftPx": 6, "driftAsleepPx": 10, "driftPeriodXS": 420, "driftPeriodYS": 570,
+    "idleDimS": 180, "idleFadeMs": 4000, "brightIdle": 30, "idleLid": 0.18,
+    "offAfterS": 300
   },
   "emotions": {
     "neutral":   {"eyeW":108,"eyeH":150,"radius":50,"gap":88,"dy":0,  "lid":0.00,"slant":0,  "asym":0.00,"lower":0.00,"mouthW":72, "curve":8,  "open":0.00,"mouthDx":0, "gazeX":0,   "gazeY":0,   "color":"#45E3D2","ring":"off"},

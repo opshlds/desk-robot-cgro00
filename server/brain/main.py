@@ -339,6 +339,32 @@ def stop_speaking(why: str) -> None:
     reply.stop()
 
 
+def gaze_message(x, y, hold_ms=None) -> dict:
+    """{"type":"gaze"} for the face: x/y in -1..1 (+x = screen right, +y = down),
+    clamped; hold_ms (100-60000) overrides how long the face holds it."""
+    def unit(v) -> float:
+        f = float(v)
+        if f != f or f in (float("inf"), float("-inf")):
+            raise ValueError("not a number")
+        return round(max(-1.0, min(1.0, f)), 2)
+    msg = {"type": "gaze", "x": unit(x), "y": unit(y)}
+    if hold_ms is not None:
+        hold = int(float(hold_ms))
+        if not 100 <= hold <= 60000:
+            raise ValueError("hold_ms must be 100-60000")
+        msg["hold_ms"] = hold
+    return msg
+
+
+async def set_gaze(x, y, hold_ms=None) -> bool:
+    """Point the face's eyes (ValueError on bad input). False when no face is connected."""
+    return await send_to_robot(gaze_message(x, y, hold_ms))
+
+
+async def release_gaze() -> bool:
+    return await send_to_robot({"type": "gaze", "release": True})
+
+
 async def handle_console_line(line: str) -> bool:
     """Returns False when the server should shut down."""
     line = line.strip()
@@ -406,6 +432,20 @@ async def handle_console_line(line: str) -> bool:
             print(f"camera -> {arg.lower()} (the board saves it)")
         except ValueError as e:
             print(f"camres: {e}")
+    elif cmd == "gaze":
+        parts = arg.split()
+        try:
+            if parts == ["off"]:
+                sent = await release_gaze()
+            elif len(parts) in (2, 3):
+                sent = await set_gaze(*parts)
+            else:
+                raise ValueError("usage")
+        except ValueError:
+            print("usage: gaze <x> <y> [hold ms]  (x, y from -1 to 1; +x = screen right, +y = down) | gaze off")
+            return True
+        if not sent:
+            print("no face connected")
     elif cmd == "mouthdelay":
         lo, hi = TUNABLE["MOUTH_DELAY_SECONDS"]
         if arg:
@@ -421,7 +461,7 @@ async def handle_console_line(line: str) -> bool:
         else:
             print(f"mouth delay = {config.MOUTH_DELAY_SECONDS:g} s")
     else:
-        print("commands: ask <q> | say <text> | volume <0-1> | mouthdelay [s] | camres [qvga|vga|svga|hd] | listen | mic | track on|off | emo <name> | pan <deg> | tilt <deg> | status | quit")
+        print("commands: ask <q> | say <text> | volume <0-1> | mouthdelay [s] | camres [qvga|vga|svga|hd] | gaze <x> <y> [ms] | gaze off | listen | mic | track on|off | emo <name> | pan <deg> | tilt <deg> | status | quit")
     return True
 
 

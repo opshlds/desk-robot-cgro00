@@ -16,4 +16,6 @@ uint8_t brightness();
 void setBrightnessOverride(int b);     // -1 = follow the face (awake/asleep)
 int brightnessOverride();
 uint32_t flushedPixels();              // since boot, for the fps readout
+void setPower(bool on);                // M4: panel display off (0x28) / on (0x29)
+bool powered();
 }  // namespace display

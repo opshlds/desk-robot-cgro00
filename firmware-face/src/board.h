@@ -2,7 +2,7 @@
 // Waveshare ESP32-S3-Touch-AMOLED-1.43 (466x466 round AMOLED, FT3168 touch).
 // Pins from the Waveshare wiki and the board's pin_config.h.
 
-#define FACE_FW_VERSION "0.2.1"
+#define FACE_FW_VERSION "0.3.0"
 
 #define LCD_W 466
 #define LCD_H 466
