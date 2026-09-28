@@ -193,7 +193,10 @@ also type `ask what is a weekend?` into the server console.
 
 The live view at <http://localhost:8766/> is Rocky's console: what he sees,
 what he hears, the last exchange, and controls for his head, face, voice,
-sleep, and listening. It only answers this computer.
+sleep, and listening. By default it only answers this computer. To open it
+to your LAN, set `LIVE_VIEW_BIND` (this computer's LAN address) and
+`LIVE_VIEW_PASSWORD` in `server/.env`; the browser then asks for the password
+(any user name).
 
 ## Connect the robot to the brain
 

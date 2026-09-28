@@ -1132,8 +1132,22 @@ async def main() -> None:
     print(f"listening for the robot on ws://0.0.0.0:{config.PORT}")
     eyes.state_provider = console_state
     eyes.command_handler = console_command
-    eyes.serve(config.LIVE_VIEW_PORT, config.LIVE_VIEW_BIND)
-    print(f"live view + controls: http://localhost:{config.LIVE_VIEW_PORT}/  (this computer only)")
+    bind, password = config.LIVE_VIEW_BIND, config.LIVE_VIEW_PASSWORD
+    try:
+        eyes.serve(config.LIVE_VIEW_PORT, bind, password)
+    except ValueError as e:
+        print(f"WARNING: {e}. The live view stays on this computer only.")
+        bind = "127.0.0.1"
+        eyes.serve(config.LIVE_VIEW_PORT, bind, password)
+    lock = "password on" if password else "no password"
+    if bind in ("127.0.0.1", "localhost", "::1"):
+        print(f"live view + controls: http://localhost:{config.LIVE_VIEW_PORT}/  (this computer only, {lock})")
+    else:
+        where = "this computer's addresses" if bind in ("0.0.0.0", "::") else bind
+        print(f"live view + controls: http://{where}:{config.LIVE_VIEW_PORT}/  (LAN, {lock})")
+        if not password:
+            print("WARNING: the live view is open to the LAN without a password — "
+                  "set LIVE_VIEW_PASSWORD in server/.env")
     if not os.environ.get("ROBOT_TOKEN"):
         print("WARNING: ROBOT_TOKEN is not set in server/.env — the robot will be refused")
     global tracker, brain, main_loop

@@ -194,7 +194,17 @@ EMOTIONS = [
 # is at http://localhost:<LIVE_VIEW_PORT>/ on this computer.
 CAMERA_FPS = 10
 LIVE_VIEW_PORT = 8766
-LIVE_VIEW_BIND = "127.0.0.1"  # this computer only. "0.0.0.0" would show the camera to the whole LAN.
+# Where the live view listens. 127.0.0.1 = this computer only (reach it from
+# elsewhere with an SSH tunnel). To open it to the LAN, set LIVE_VIEW_BIND in
+# server/.env to this computer's LAN address (e.g. 192.168.1.99; browse to
+# http://that-address:8766/), or 0.0.0.0 for every address, which is only
+# allowed together with a password.
+LIVE_VIEW_BIND = os.environ.get("LIVE_VIEW_BIND") or "127.0.0.1"
+# Optional password for the live view (server/.env). When set, the browser
+# asks for it (any user name). Strongly advised whenever LIVE_VIEW_BIND is not
+# 127.0.0.1: the page shows the camera and can make Rocky talk. Plain HTTP,
+# so it keeps out housemates and IoT gadgets, not someone sniffing the WiFi.
+LIVE_VIEW_PASSWORD = os.environ.get("LIVE_VIEW_PASSWORD", "")
 SEND_CAMERA_TO_BRAIN = True  # let Rocky see the camera when a question is about seeing
 # A frame is attached only when the question is about seeing (any of these
 # words or phrases). Everyday words like "this", "that", "here", "there" and

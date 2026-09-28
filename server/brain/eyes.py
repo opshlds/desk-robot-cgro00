@@ -14,11 +14,17 @@ newest. A tiny HTTP server (standard library, its own thread) serves:
              (main.py). Only answers requests that carry the X-Rocky-Console
              header, which a cross-site page can't add without a CORS
              preflight we never grant.
+
+With a password (LIVE_VIEW_PASSWORD in server/.env) every request needs
+HTTP Basic auth: the browser asks once, any user name, that password.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
+import secrets
 import threading
 import time
 from collections.abc import Callable
@@ -26,6 +32,39 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import config
+
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+WILDCARD = ("0.0.0.0", "::", "")
+
+
+def check_basic_auth(header: str | None, password: str) -> bool:
+    """True if an Authorization header carries `password` (any user name).
+    An empty password means no password is required."""
+    if not password:
+        return True
+    if not header or not header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(header[6:].strip(), validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return False
+    _, sep, offered = decoded.partition(":")
+    return bool(sep) and secrets.compare_digest(offered.encode(), password.encode())
+
+
+def host_allowed(host_header: str | None, bind: str, password: str) -> bool:
+    """DNS-rebinding guard: only answer requests addressed to us by a name we
+    know (localhost, or the address we're bound to). Bound to every address
+    (0.0.0.0) any name is accepted, but only with a password: a rebinding page
+    can't supply it."""
+    host = (host_header or "").strip().lower()
+    if host.startswith("["):                      # [::1]:8766
+        host = host[1:].split("]", 1)[0]
+    else:
+        host = host.split(":", 1)[0]
+    if host in LOOPBACK or host == bind.lower():
+        return True
+    return bind in WILDCARD and bool(password)
 
 
 class Eyes:
@@ -91,11 +130,13 @@ class Eyes:
             return self.frame_seq
 
     # ── browser ─────────────────────────────────────────────────────────────
-    def serve(self, port: int, bind: str = "127.0.0.1") -> None:
+    def serve(self, port: int, bind: str = "127.0.0.1", password: str = "") -> None:
         eyes = self
+        if bind in WILDCARD and not password:
+            raise ValueError("the live view only listens on every address (0.0.0.0) with a "
+                             "LIVE_VIEW_PASSWORD; set one, or bind to one LAN address instead")
         page = (Path(__file__).with_name("liveview.html").read_text(encoding="utf-8")
                 .replace("{name}", config.ROBOT_NAME).encode())
-        local_hosts = ("localhost", "127.0.0.1", "::1", bind.lower())
 
         class Handler(BaseHTTPRequestHandler):
             server_version = "desk-robot"  # don't advertise the Python version
@@ -107,10 +148,21 @@ class Eyes:
             def _local(self) -> bool:
                 # A malicious web page can point its own domain at 127.0.0.1
                 # (DNS rebinding) and read a localhost server. Only answer
-                # requests addressed to us by a local name.
-                host = (self.headers.get("Host") or "").split(":")[0].strip("[]").lower()
-                if host not in local_hosts:
+                # requests addressed to us by a name we know.
+                if not host_allowed(self.headers.get("Host"), bind, password):
                     self._reply(403, "text/plain", b"forbidden")
+                    return False
+                auth = self.headers.get("Authorization")
+                if not check_basic_auth(auth, password):
+                    if auth:
+                        time.sleep(1.0)       # a wrong guess costs a second
+                    self.send_response(401)
+                    self.send_header("WWW-Authenticate", f'Basic realm="{config.ROBOT_NAME} console", charset="UTF-8"')
+                    self.send_header("Content-Type", "text/plain")
+                    self.send_header("Content-Length", "13")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(b"password, pls")
                     return False
                 return True
 
@@ -122,8 +174,9 @@ class Eyes:
                 # header — that turns it into a preflighted request, and we
                 # never answer preflights. Belt and braces: check Origin too.
                 origin = (self.headers.get("Origin") or "").lower()
-                origin_host = origin.split("://", 1)[-1].split(":")[0].strip("[]")
-                if self.headers.get("X-Rocky-Console") != "1" or (origin and origin_host not in local_hosts):
+                origin_host = origin.split("://", 1)[-1].rstrip("/")
+                same_origin = origin_host == (self.headers.get("Host") or "").lower()
+                if self.headers.get("X-Rocky-Console") != "1" or (origin and not same_origin):
                     self._reply(403, "application/json", b'{"error": "not the console"}')
                     return
                 if not self.path.startswith("/api/") or eyes.command_handler is None:
