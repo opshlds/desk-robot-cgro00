@@ -4,7 +4,7 @@ Firmware for the **Seeed XIAO ESP32-S3 Sense** with its camera/mic expansion boa
 
 | | |
 |---|---|
-| Version | cam-fw 0.1.1 |
+| Version | cam-fw 0.1.2 |
 | Board | XIAO ESP32-S3 Sense: ESP32-S3R8 (8 MB octal PSRAM), 8 MB flash, OV2640 or OV3660 camera |
 | Brain | `ws://192.168.1.99:8765`, hello `{"who":"xiao-camera","roles":["camera"]}` |
 | Sends | binary `0x02` + JPEG (SVGA 800×600 by default, `res` to change) at the rate the brain asks for (`stream on`, 10 fps); `temp` every 10 s |
@@ -14,11 +14,11 @@ Firmware for the **Seeed XIAO ESP32-S3 Sense** with its camera/mic expansion boa
 `bin/cam-fw-<version>-factory.bin` is a complete image (bootloader, partitions, app), for a new board. Take the factory backup first (once):
 ```
 esptool --port COMx read-flash 0 ALL xiao-factory.bin
-esptool --port COMx write-flash 0x0 bin\cam-fw-0.1.1-factory.bin
+esptool --port COMx write-flash 0x0 bin\cam-fw-0.1.2-factory.bin
 ```
 The full image also blanks the settings area, so re-enter `token` and `wifi` afterwards. To **update** a board that is already set up, write only the app and the settings stay:
 ```
-esptool --port COMx write-flash 0x10000 bin\cam-fw-0.1.1-app.bin
+esptool --port COMx write-flash 0x10000 bin\cam-fw-0.1.2-app.bin
 ```
 If the port doesn't show up or the flash fails to connect: hold **BOOT**, plug in USB-C (or tap RESET), release BOOT.
 Restore: `esptool --port COMx write-flash 0x0 xiao-factory.bin`.
@@ -45,10 +45,12 @@ temp   reboot   help
 ```
 
 ## Picture size
+Set it from the brain's console page (Picture: QVGA / VGA / SVGA / HD under the camera view), with `camres <size>` in the brain console, or with `res` here. The board saves it and reports it to the brain on connect and after each change (`{"type":"camera","res":"vga","w":640,"h":480}`; the brain sends `{"type":"camera","res":"svga"}` to change it).
+
 The frame buffers are sized for HD, so `res` switches size on the fly (the stream pauses for about 0.2 s). Rough JPEG sizes at quality 12: QVGA 4–15 KB, VGA 15–35 KB, SVGA 25–50 KB, HD 40–100 KB; frames up to 160 KB are sent (the brain accepts 256 KB). Bigger pictures help Rocky's vision questions but cost WiFi airtime and a little heat; the brain's tracker and live view take any size.
 
 ## Console input
-PuTTY's Ctrl-V sends a control character instead of pasting (paste with a right-click). Since 0.1.1 the console drops control characters and arrow-key escape sequences, so they can no longer end up in a saved token.
+PuTTY's Ctrl-V sends a control character instead of pasting (paste with a right-click). Since 0.1.1 the console drops control characters and arrow-key escape sequences, so they can no longer end up in a saved token. Since 0.1.2, `wifi` refuses a network name with quotes or brackets: PuTTY copies whatever you select and pastes it on a right-click, and a pasted `net` line (`wifi "IOTNSFW" up (192.168.1.143, -49 dBm)`) once saved itself as the WiFi settings.
 
 ## Build
 Same toolchain as `firmware-face`: pioarduino 55.03.311 (Arduino core 3.3.11). `pio run`, then the image is `.pio/build/camera/firmware.factory.bin`. Everything downloads from GitHub except PlatformIO's own `tool-scons`, which comes from the registry; where that is blocked, unpack the `scons` wheel from PyPI into `~/.platformio/packages/tool-scons` with a `scons.py` launcher, a `package.json` and a `.piopm` (version 4.41101.0).

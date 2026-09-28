@@ -54,6 +54,7 @@ void onEvent(WStype_t type, uint8_t* payload, size_t length) {
       connectedAt = millis();
       Serial.printf("brain: connected to %s:%u\r\n", host.c_str(), port);
       sendHello();
+      handler("connected", "", 0, true);
       break;
     case WStype_DISCONNECTED:
       if (isConnected) {
@@ -61,7 +62,7 @@ void onEvent(WStype_t type, uint8_t* payload, size_t length) {
         // camera role is still held by our previous connection; it retries).
         if (millis() - connectedAt < 1500) Serial.println("brain: closed right after hello (token? role taken?) - retrying");
         else Serial.println("brain: disconnected - retrying");
-        handler("disconnected", 0, false);
+        handler("disconnected", "", 0, false);
       }
       isConnected = false;
       break;
@@ -69,8 +70,9 @@ void onEvent(WStype_t type, uint8_t* payload, size_t length) {
       JsonDocument doc;
       if (deserializeJson(doc, payload, length)) return;
       const char* t = doc["type"] | "";
-      if (!strcmp(t, "stream")) handler("stream", doc["fps"] | 10.0f, doc["on"] | false);
-      else if (!strcmp(t, "asleep")) handler("asleep", 0, doc["on"] | false);
+      if (!strcmp(t, "stream")) handler("stream", "", doc["fps"] | 10.0f, doc["on"] | false);
+      else if (!strcmp(t, "camera")) handler("camera", doc["res"] | "", 0, true);
+      else if (!strcmp(t, "asleep")) handler("asleep", "", 0, doc["on"] | false);
       // Anything else (emotion, mouth, ...) isn't for the camera.
       break;
     }
@@ -121,7 +123,7 @@ void update(uint32_t now) {
   } else if (!up && wifiReported) {
     Serial.println("wifi: lost, retrying");
     wifiReported = false;
-    if (isConnected) handler("disconnected", 0, false);
+    if (isConnected) handler("disconnected", "", 0, false);
     isConnected = false;
   }
   if (up) ws.loop();

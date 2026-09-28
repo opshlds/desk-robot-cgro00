@@ -69,12 +69,32 @@ void saveRes(framesize_t size) {
 
 void setLed(bool on) { digitalWrite(PIN_LED, on ? LOW : HIGH); }  // active low
 
+// Tell the brain the picture size (on connect and after every change), so
+// its console page can show it.
+void reportCamera() {
+  const Res* r = findRes(camera.frameSize());
+  brainlink::send(String("{\"type\":\"camera\",\"res\":\"") + r->name + "\",\"w\":" + r->w + ",\"h\":" + r->h + "}");
+}
+
+bool changeRes(const Res* r) {
+  if (!camera.setFrameSize(r->size)) return false;
+  saveRes(r->size);
+  reportCamera();
+  return true;
+}
+
 // ---- brain messages ---------------------------------------------------------
-void onBrain(const char* type, float value, bool on) {
+void onBrain(const char* type, const char* arg, float value, bool on) {
   if (!strcmp(type, "stream")) {
     wantedFps = value;
     camera.setStreaming(on, value);
     Serial.printf("brain: stream %s @ %.1f fps\r\n", on ? "on" : "off", camera.fps());
+  } else if (!strcmp(type, "camera")) {
+    const Res* r = findRes(String(arg));
+    if (r && changeRes(r)) Serial.printf("brain: res %s = %dx%d (saved)\r\n", r->name, r->w, r->h);
+    else Serial.printf("brain: res \"%s\" refused\r\n", arg);
+  } else if (!strcmp(type, "connected")) {
+    reportCamera();
   } else if (!strcmp(type, "asleep")) {
     Serial.printf("brain: %s\r\n", on ? "asleep" : "awake");
   } else if (!strcmp(type, "disconnected")) {
@@ -148,8 +168,7 @@ void command(String line) {
       Serial.printf("res %s (%dx%d) - say: res qvga|vga|svga|hd\r\n", cur->name, cur->w, cur->h);
       return;
     }
-    if (camera.setFrameSize(r->size)) {
-      saveRes(r->size);
+    if (changeRes(r)) {
       Serial.printf("res %s = %dx%d (saved)\r\n", r->name, r->w, r->h);
     } else {
       Serial.println("res: the camera refused that size");
@@ -173,6 +192,11 @@ void command(String line) {
   } else if (cmd == "wifi") {
     int last = arg.lastIndexOf(' ');
     if (last < 1) Serial.println("say: wifi <ssid> <password>");
+    else if (arg.substring(0, last).indexOf('"') >= 0 || arg.substring(0, last).indexOf('(') >= 0)
+      // A `net` status line pasted back in (PuTTY pastes on right-click) looks
+      // like: wifi "IOTNSFW" up (192.168.1.143, -49 dBm). Don't save that.
+      // Only the network name is checked; the password may contain anything.
+      Serial.println("wifi: the network name has quotes or brackets - looks like pasted console output, not saved");
     else brainlink::setWifi(arg.substring(0, last), arg.substring(last + 1));
   } else if (cmd == "token") {
     if (arg.length()) brainlink::setToken(arg); else Serial.println("say: token <ROBOT_TOKEN>");

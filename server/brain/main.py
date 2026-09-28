@@ -70,6 +70,7 @@ FRAME_BYTES = 3200  # 100 ms of 16 kHz s16le per audio frame to the robot
 current_emotion = "neutral"
 speaker_volume = 0.7        # mirrors firmware SPEAKER_VOLUME until changed here
 thinking = False            # a reply is being composed (before it's spoken)
+camera_info: dict | None = None  # {"res", "w", "h"} as the camera board last reported it
 TUNABLE = {                 # config knobs the console may change live: (min, max)
     "VAD_THRESHOLD": (0.1, 0.95),
     "TURN_THRESHOLD": (0.1, 0.95),
@@ -206,6 +207,9 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
             if kind == "speak_done" and "speaker" in roles:
                 robot_speak_done.set()
                 continue
+            if kind == "camera" and "camera" in roles:
+                note_camera(event)
+                continue
             if kind == "temp":
                 try:
                     eyes.temperature = float(event.get("c"))
@@ -236,7 +240,42 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
             print(f"board disconnected: {device.who} [{roles_text(roles)}]")
             if "speaker" in roles:
                 robot_speak_done.set()  # don't leave a reply waiting for a board that's gone
+            if "camera" in roles:
+                forget_camera()
             pick_mic_source()
+
+
+def note_camera(event: dict) -> None:
+    """The camera board says what picture size it is sending (on connect and
+    after every change, from its own console or from here)."""
+    global camera_info
+    res = str(event.get("res", "")).lower()
+    try:
+        w, h = int(event.get("w", 0)), int(event.get("h", 0))
+    except (TypeError, ValueError):
+        w = h = 0
+    if res not in config.CAMERA_SIZES:
+        return
+    if camera_info is None or camera_info.get("res") != res:
+        print(f"camera: {res} {w}x{h}")
+    camera_info = {"res": res, "w": w, "h": h}
+
+
+def forget_camera() -> None:
+    global camera_info
+    camera_info = None
+
+
+async def set_camera_res(res: str) -> None:
+    """Ask the camera board for another picture size. It saves the choice and
+    reports back (note_camera). Raises ValueError for an unknown size or
+    when no camera is connected."""
+    res = res.strip().lower()
+    if res not in config.CAMERA_SIZES:
+        raise ValueError(f"sizes: {', '.join(config.CAMERA_SIZES)}")
+    if devices.owner("camera") is None:
+        raise ValueError("no camera connected")
+    await send_to_robot({"type": "camera", "res": res})
 
 
 async def board_woke(word: str) -> None:
@@ -353,6 +392,20 @@ async def handle_console_line(line: str) -> bool:
             await set_volume(float(arg))
         except ValueError:
             print("usage: volume <0.0-1.0>")
+    elif cmd == "camres":
+        if not arg:
+            if devices.owner("camera") is None:
+                print("no camera connected")
+            elif camera_info is None:
+                print("camera size unknown (cam-fw 0.1.2+ reports it)")
+            else:
+                print(f"camera: {camera_info['res']} {camera_info['w']}x{camera_info['h']}")
+            return True
+        try:
+            await set_camera_res(arg)
+            print(f"camera -> {arg.lower()} (the board saves it)")
+        except ValueError as e:
+            print(f"camres: {e}")
     elif cmd == "mouthdelay":
         lo, hi = TUNABLE["MOUTH_DELAY_SECONDS"]
         if arg:
@@ -368,7 +421,7 @@ async def handle_console_line(line: str) -> bool:
         else:
             print(f"mouth delay = {config.MOUTH_DELAY_SECONDS:g} s")
     else:
-        print("commands: ask <q> | say <text> | volume <0-1> | mouthdelay [s] | listen | mic | track on|off | emo <name> | pan <deg> | tilt <deg> | status | quit")
+        print("commands: ask <q> | say <text> | volume <0-1> | mouthdelay [s] | camres [qvga|vga|svga|hd] | listen | mic | track on|off | emo <name> | pan <deg> | tilt <deg> | status | quit")
     return True
 
 
@@ -808,6 +861,8 @@ def console_state() -> dict:
         "head_held": head_held,
         "tracking_enabled": tracker.enabled if tracker is not None else False,
         "volume": speaker_volume,
+        "camera": {"connected": devices.owner("camera") is not None, **(camera_info or {}),
+                   "sizes": list(config.CAMERA_SIZES)},
         "tuning": {k: getattr(config, k) for k in TUNABLE},
     }
 
@@ -854,6 +909,8 @@ async def _console_command(action: str, payload: dict) -> dict:
             tracker.note_pose(pan=0, tilt=0)
     elif action == "volume":
         await set_volume(_number(payload, "level", 0.0, 1.0))
+    elif action == "camera":
+        await set_camera_res(str(payload.get("res", "")))
     elif action == "track":
         await set_tracking(bool(payload.get("on", True)))
     elif action == "sleep":

@@ -19,14 +19,14 @@ it concerns (`server/brain/devices.py`, ROUTES):
 |---|---|
 | `speak_begin`, `speak_end`, `volume`, TTS audio | speaker |
 | `mic` | mic |
-| `stream` | camera |
+| `stream`, `camera` | camera |
 | `pan`, `tilt`, `glance` | neck |
 | `mouth` | face |
 | `emotion`, `asleep` | every board |
 
 and only accepts board messages from the matching role: mic audio from the
 mic, camera frames from the camera, `speak_done`, `abort` and `mouth` from
-the speaker, `wake` from the mic, `touch` from the face.
+the speaker, `wake` from the mic, `touch` from the face, `camera` from the camera.
 
 HAIL-E's layout: the Yahboom voice board (through `server/bridge/`, which
 translates the Xiaozhi protocol) = `mic` + `speaker`; the XIAO = `camera`
@@ -46,6 +46,7 @@ The rest of the frame is the payload.
 {"type": "speak_done"}            // finished playing the last reply
 {"type": "touch", "gesture": "tap"}   // face: tap | long | swipe_l | swipe_r. Tap wakes him, long press = sleep
 {"type": "mouth", "level": 0.62}  // speaker: how open his mouth is right now, 0..1 (see Mouth sync)
+{"type": "camera", "res": "vga", "w": 640, "h": 480}  // camera: its picture size, on connect and after every change
 ```
 
 Binary `0x01` frames: microphone audio, 16 kHz mono signed 16-bit PCM,
@@ -68,6 +69,7 @@ the latest frame for the live-view page, the face tracker, and the language mode
 {"type": "glance", "on": false}   // allow/forbid the firmware's idle head glances; the server sends off on connect and leaves them off
 {"type": "mic", "on": true}       // stream the microphone to the server
 {"type": "stream", "on": true, "fps": 10}   // start/stop the camera stream, set rate
+{"type": "camera", "res": "svga"} // camera: picture size qvga | vga | svga | hd (the board saves it and reports back)
 {"type": "mouth", "level": 0.62}  // face: open the mouth this far (0 = closed); it closes by itself 300 ms after the last one
 ```
 

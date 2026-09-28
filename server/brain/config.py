@@ -190,6 +190,11 @@ EMOTIONS = [
     "thinking",
 ]
 
+# Picture sizes the camera board (firmware-camera, cam-fw 0.1.2+) can be set
+# to from the console (`camres`) or the live-view page. The board keeps the
+# choice in its own settings and reports it on connect.
+CAMERA_SIZES = {"qvga": (320, 240), "vga": (640, 480), "svga": (800, 600), "hd": (1280, 720)}
+
 # Camera. The robot streams small JPEGs while connected; the live view
 # is at http://localhost:<LIVE_VIEW_PORT>/ on this computer.
 CAMERA_FPS = 10

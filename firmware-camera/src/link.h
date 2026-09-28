@@ -7,7 +7,9 @@
 #include <functional>
 
 namespace brainlink {
-using Handler = std::function<void(const char* type, float value, bool on)>;
+// type: "stream" (value = fps, on), "camera" (arg = res name), "asleep" (on),
+// "connected" (hello sent), "disconnected".
+using Handler = std::function<void(const char* type, const char* arg, float value, bool on)>;
 
 void begin(Handler onMessage);     // reads NVS; does nothing until WiFi is set
 void update(uint32_t nowMs);

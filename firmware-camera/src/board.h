@@ -1,7 +1,7 @@
 #pragma once
 // Seeed XIAO ESP32-S3 Sense: what this firmware uses.
 
-#define CAM_FW_VERSION "0.1.1"
+#define CAM_FW_VERSION "0.1.2"
 
 // User LED (orange, next to USB-C), active low. On = connected to the brain.
 constexpr int PIN_LED = 21;

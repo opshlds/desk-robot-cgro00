@@ -123,6 +123,9 @@
   .faces { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; }
   .faces button { min-width: 0; padding-left: 6px; padding-right: 6px; }
   .faces button { text-transform: capitalize; }
+  .camres { margin-top: 10px; }
+  .sizes { display: flex; flex-wrap: wrap; gap: 6px; }
+  .sizes button { text-transform: uppercase; padding-left: 10px; padding-right: 10px; }
   input[type=text] { flex: 1; min-width: 120px; font: 14px var(--body); color: var(--ink); background: #090c13; border: 1px solid var(--line-strong); border-radius: 4px; padding: 8px 10px; }
   input[type=text]::placeholder { color: var(--muted); }
   .hint { margin: 8px 0 0; font: 12px var(--body); color: var(--muted); }
@@ -167,6 +170,7 @@
         <div class="readout"><span id="rpan">pan —</span><span id="rtilt">tilt —</span><span id="rtrack" class="off">not tracking</span></div>
         <div class="nocam">No picture yet.<br>The robot's camera streams once it connects.</div>
       </div>
+      <div class="field camres"><span class="k">Picture</span><div class="sizes" id="camres"></div><span class="v" id="camresv">—</span></div>
       <div class="card" style="margin-top:16px">
         <h2 class="label"><span><span class="pname">{name}</span> hears</span><span class="sonar-state" id="hearstate">—</span></h2>
         <div class="sonar"><canvas id="wave"></canvas></div>
@@ -264,6 +268,14 @@
     const b = document.createElement("button"); b.textContent = e; b.dataset.emotion = e;
     b.onclick = () => act("emotion", { name: e });
     faces.appendChild(b);
+  }
+  // Camera picture size: the board saves it and reports back.
+  const CAM_SIZES = { qvga: "320×240", vga: "640×480", svga: "800×600", hd: "1280×720" };
+  const camres = $("camres");
+  for (const [k, dims] of Object.entries(CAM_SIZES)) {
+    const b = document.createElement("button"); b.textContent = k; b.dataset.res = k; b.title = dims;
+    b.onclick = () => act("camera", { res: k }, "Camera → " + k.toUpperCase() + " (" + dims + ")");
+    camres.appendChild(b);
   }
   let headTimer;
   function headChanged() {
@@ -364,6 +376,9 @@
       if (!dragging.has("tilt")) { $("tilt").value = Math.round(tilt); $("tiltv").textContent = Math.round(tilt) + "°"; }
       if (s.volume != null && document.activeElement !== $("vol")) { $("vol").value = s.volume; $("volv").textContent = (+s.volume).toFixed(2); }
       for (const b of faces.children) b.classList.toggle("active", b.dataset.emotion === s.emotion);
+      const cam = s.camera || {};
+      for (const b of camres.children) { b.disabled = !cam.connected; b.classList.toggle("active", b.dataset.res === cam.res); }
+      $("camresv").textContent = !cam.connected ? "no camera" : cam.res ? cam.w + "×" + cam.h : "size unknown";
       $("trackbtn").classList.toggle("active", !!s.tracking_enabled);
       $("trackbtn").textContent = s.tracking_enabled ? "Stop following" : "Follow my face";
       $("heard").textContent = s.last_heard || ""; $("said").textContent = s.last_said || "";
