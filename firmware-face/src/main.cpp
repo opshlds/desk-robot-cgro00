@@ -17,6 +17,7 @@
 #include "face_engine.h"
 #include "face_view.h"
 #include "link.h"
+#include "ota.h"
 #include "touch.h"
 
 namespace {
@@ -26,6 +27,8 @@ bool synthTalk = false, stats = false;
 float talkT = 0;
 uint32_t frames = 0, statsFrom = 0, statsPixels = 0;
 uint32_t mouthUntil = 0;          // brain mouth levels keep the mouth going until then
+bool updating = false;            // an OTA download is running: the face "thinks"
+String emotionAfterUpdate = "neutral";
 
 // ---- timed actions (demo, touch reactions) ---------------------------------
 enum class Act : uint8_t { Emo, Sleep, Wake, TalkOn, TalkOff, Say };
@@ -125,7 +128,9 @@ void onGesture(Gesture g) {
 
 // ---- brain messages ---------------------------------------------------------
 void onBrain(const char* type, const char* arg) {
-  if (!strcmp(type, "emotion")) {
+  if (!strcmp(type, "emotion") && updating) {   // shown once the download is over (if it fails)
+    emotionAfterUpdate = arg;
+  } else if (!strcmp(type, "emotion")) {
     clearLater();
     if (!face.setEmotion(arg)) Serial.printf("brain: unknown emotion %s\r\n", arg);
   } else if (!strcmp(type, "asleep")) {
@@ -158,7 +163,7 @@ void help() {
       "  bright <0..255>|auto\r\n"
       "  test on|off         (check screen: edge ring, colour thirds, touch dot)\r\n"
       "  panel sh8601|co5300 (saves and reboots - or hold BOOT 1.5 s)\r\n"
-      "  stats on|off        info        reboot\r\n"
+      "  stats on|off        info        ota (update slots)   reboot\r\n"
       "  wifi <ssid> <password>   token <ROBOT_TOKEN>   brain <host> [port]   net");
 }
 
@@ -226,6 +231,7 @@ void command(String line) {
   else if (cmd == "stats") { if (onOff(arg, b)) { stats = b; frames = 0; statsFrom = millis(); statsPixels = display::flushedPixels(); } }
   else if (cmd == "info") info();
   else if (cmd == "net") brainlink::status();
+  else if (cmd == "ota") ota::status();
   else if (cmd == "wifi") {
     int last = arg.lastIndexOf(' ');           // the SSID may contain spaces; the password is the last word
     if (last < 1) Serial.println("say: wifi <ssid> <password>");
@@ -306,6 +312,9 @@ void setup() {
   for (int i = 0; i < 20 && !Serial; i++) delay(100);
   delay(200);
   Serial.printf("\r\nHAIL-E face-fw %s\r\n", FACE_FW_VERSION);
+  if (FW_NOTE[0]) Serial.printf("%s\r\n", FW_NOTE);
+  ota::begin(FACE_FW_VERSION, [](const char* l) { Serial.printf("%s\r\n", l); },
+             [](const String& j) { brainlink::send(j); });
 
   step("display");
   if (!display::begin()) {
@@ -366,6 +375,20 @@ void loop() {
 
   if (mouthUntil && (int32_t)(now - mouthUntil) >= 0) { mouthUntil = 0; face.setTalking(false); }
   brainlink::update(now);
+  ota::update(now);
+  // OTA download: the face "thinks" (the rim ring spins) and the screen
+  // stays on; brain emotions wait until it's over. On success it reboots.
+  if (ota::busy() != updating) {
+    updating = ota::busy();
+    if (updating) {
+      emotionAfterUpdate = face.emotion();
+      clearLater();
+      face.setEmotion("thinking");
+    } else {
+      face.setEmotion(emotionAfterUpdate.c_str());
+    }
+  }
+  if (updating) face.poke();
   runDue(now);
   readConsole();
   checkBootButton(now);

@@ -9,7 +9,8 @@ Firmware for the **Waveshare ESP32-S3-Touch-AMOLED-1.43** (466x466 AMOLED, FT316
 | M2 WiFi + brain link (role `face`), touches to the brain | done (0.2.0) |
 | M3 mouth sync (`mouth` levels from the brain) | done (0.2.0 obeys `mouth`; brain side in patch 0010) |
 | 0.2.1 console fixes: token fingerprint, pasted `ROBOT_TOKEN=` lines, 240-char lines | done (0.2.1) |
-| M4 gaze, drift, dim after 3 min, screen off after 5 min; console ignores control characters | **this build (0.3.0)** |
+| M4 gaze, drift, dim after 3 min, screen off after 5 min; console ignores control characters | done (0.3.0) |
+| OTA from the brain (download into the spare slot, sha256, rollback unless the brain answers); `ota` on the console | **this build (0.4.0)** |
 
 ## Layout
 ```
@@ -24,19 +25,31 @@ src/face_view.*           draws that list with LVGL, redraws only what changed
 src/display.*             QSPI panel (SH8601 or CO5300) + LVGL driver
 src/touch.*               FT3168 -> tap / long / swipe_l / swipe_r
 src/link.*                WiFi + WebSocket to the brain (role face), settings in NVS
+src/ota.*                 over-the-air updates from the brain (same file in firmware-camera, firmware-neck)
 src/main.cpp              boot, loop, serial console
 ```
 Face Lab and the firmware run the same engine. A host-side test compares their draw lists frame by frame and they match. So a face tuned in Face Lab looks the same on the board.
 
 ## Quickest: flash the prebuilt image with esptool
-`bin/face-fw-0.3.0-factory.bin` is a complete image (bootloader, partitions and app), built from this source. esptool is already on the PC.
+`bin/face-fw-0.4.0-factory.bin` is a complete image (bootloader, partitions and app), built from this source. esptool is already on the PC.
 
 ```
 esptool --port COMx read-flash 0 ALL waveshare-amoled-factory.bin     (one-time backup, 16 MB)
-esptool --port COMx write-flash 0x0 bin\face-fw-0.3.0-factory.bin
+esptool --port COMx write-flash 0x0 bin\face-fw-0.4.0-factory.bin
 ```
 The factory image blanks the saved settings (token, WiFi, brain). On a board that is already set up, write only the app instead and the settings survive: `esptool --port COMx write-flash 0x10000 bin\face-fw-<version>-app.bin`.
 To restore the backup: `esptool --port COMx write-flash 0x0 waveshare-amoled-factory.bin`.
+
+## Over the air (from the brain console on ai1)
+Since 0.4.0 the board updates itself from the brain (brain patch 0018; docs/protocol.md "Firmware updates"). One USB flash of 0.4.0 first (below), then:
+```
+python -m tools.fw_add face ~/face-fw-<x.y.z>-app.bin     on ai1, in ~/desk-robot/server with the venv active
+ota                                                       brain console: boards, versions, images
+ota face                                                 installs the newest image (ota face <version> [force])
+```
+The board downloads into its spare slot, checks the size and sha256, reports progress and reboots into it. The new image is **on trial**: it keeps itself once the brain answers its hello and rolls back by itself if that hasn't happened within 60 s. `ota` on the board's console shows the running slot, its state and the last update. While it downloads, the face shows "thinking" (the rim ring spins) and stays lit; brain emotions wait until it's done.
+- **After an OTA the board may run from `ota_1`.** A later USB app-only flash must also reset the boot choice, or the board keeps booting the other slot: `esptool --port COMx write-flash 0xe000 boot_app0.bin 0x10000 bin\face-fw-<version>-app.bin` (`boot_app0.bin` is in `bin\`).
+- Test builds from the same source: `pio run -e face_bump` (a trivial version bump, 0.4.1) and `pio run -e face_rbtest` (0.4.2-rbtest, can never reach the brain, so it must roll back).
 
 ## Build and flash from source (Windows PC)
 1. Install VS Code and its **PlatformIO IDE** extension. Or, from a terminal: `pip install platformio`.

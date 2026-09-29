@@ -2,7 +2,13 @@
 // Waveshare ESP32-S3-Touch-AMOLED-1.43 (466x466 round AMOLED, FT3168 touch).
 // Pins from the Waveshare wiki and the board's pin_config.h.
 
-#define FACE_FW_VERSION "0.3.0"
+// The version can be overridden by a build env (platformio.ini: the OTA test builds).
+#ifndef FACE_FW_VERSION
+#define FACE_FW_VERSION "0.4.0"
+#endif
+#ifndef FW_NOTE
+#define FW_NOTE ""            // extra boot line (test builds say what they are)
+#endif
 
 #define LCD_W 466
 #define LCD_H 466

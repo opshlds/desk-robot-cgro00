@@ -6,6 +6,7 @@
 #include <WiFi.h>
 
 #include "board.h"
+#include "ota.h"
 
 namespace {
 WebSocketsClient ws;
@@ -24,6 +25,9 @@ void load() {
   host = p.getString("host", "192.168.1.99");
   port = p.getUShort("port", 8765);
   p.end();
+#ifdef OTA_TEST_NO_BRAIN
+  port = 1;                           // rollback test build: never reaches the brain
+#endif
 }
 
 void save(const char* key, const String& v) {
@@ -40,6 +44,7 @@ void sendHello() {
   doc["fw"] = FACE_FW_VERSION;
   doc["token"] = token;
   doc["roles"].add("face");
+  ota::addHello(doc);
   String out;
   serializeJson(doc, out);
   ws.sendTXT(out);
@@ -65,8 +70,10 @@ void onEvent(WStype_t type, uint8_t* payload, size_t length) {
     case WStype_TEXT: {
       JsonDocument doc;
       if (deserializeJson(doc, payload, length)) return;
+      ota::brainAnswered();              // a new image on trial keeps itself now
       const char* t = doc["type"] | "";
-      if (!strcmp(t, "emotion")) handler("emotion", doc["name"] | "neutral");
+      if (!strcmp(t, "ota")) ota::start(doc);
+      else if (!strcmp(t, "emotion")) handler("emotion", doc["name"] | "neutral");
       else if (!strcmp(t, "asleep")) handler("asleep", (doc["on"] | false) ? "on" : "off");
       else if (!strcmp(t, "mouth")) handler("mouth", String(doc["level"] | 0.0f, 3).c_str());
       else if (!strcmp(t, "gaze")) {    // M4: {"type":"gaze","x":-1..1,"y":-1..1[,"hold_ms":n]} or {"type":"gaze","release":true}
