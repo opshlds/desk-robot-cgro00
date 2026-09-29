@@ -26,6 +26,7 @@ Console commands:
   pan <deg>        push a head turn to the connected robot
   tilt <deg>       push a head nod to the connected robot
   status           show whether a robot is connected
+  ota              firmware updates for the face / camera / neck (ota help)
   quit
 """
 
@@ -44,7 +45,7 @@ from zoneinfo import ZoneInfo
 
 import websockets
 
-from . import clock, config, mouth, personality
+from . import clock, config, firmware, mouth, personality
 from .devices import Device, Registry, RoleTaken, parse_roles, roles_text
 from .thinking import Interrupted, RobotBrain, Situation
 from .ears import Ears, normalize, strip_wake_word
@@ -206,6 +207,9 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
         await websocket.close(1008)
         return
     device = Device(websocket, roles, who=str(hello.get("who", "?")), fw=str(hello.get("fw", "?")), peer=peer)
+    local = websocket.local_address[0] if websocket.local_address else ""
+    device.extra.update(ota=hello.get("ota") is True, local=local,
+                        rolled_back=str(hello.get("ota_rollback") or "")[:32])
     stale = devices.same_board(device)
     if stale:
         # The same board reconnecting (it rebooted, or its WiFi blinked)
@@ -225,6 +229,7 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
         await websocket.close(1013)
         return
     print(f"board connected: {device.describe()}")
+    ota_board_back(device)
     pick_mic_source()
     if "mic" in roles and config.MIC_SOURCE in ("auto", "robot"):
         await _send(websocket, json.dumps({"type": "mic", "on": True}))
@@ -280,6 +285,9 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
                 continue
             if kind == "mouth" and "speaker" in roles:
                 mouth_level(event.get("level"))
+                continue
+            if kind in ("ota_progress", "ota_result"):
+                ota_board_message(device, event)
                 continue
             if kind == "abort" and "speaker" in roles:
                 # The human interrupted (wake word while Rocky was talking).
@@ -420,6 +428,217 @@ async def release_gaze() -> bool:
     return await send_to_robot({"type": "gaze", "release": True})
 
 
+# ── Firmware updates over the air (face, camera, neck; brain/firmware.py) ────
+
+fw_store = firmware.Store(config.FIRMWARE_DIR)
+fw_server: firmware.ImageServer | None = None
+# role -> the update in flight: {"version", "from", "token", "stage", "pct", "since", "board"}
+# stage: sent (link sent) -> fetched (image downloaded) -> written (board rebooting)
+updates: dict[str, dict] = {}
+
+OTA_USAGE = ("usage: ota                       list boards, versions and images\n"
+             "       ota <face|camera|neck> [version] [force]   update (newest image if no version;\n"
+             "                                 force = allow a downgrade or the same version)\n"
+             "       ota <board> <version> badsha   test: send a wrong sha256 (the board must refuse)\n"
+             "       ota cancel <board>        forget an update that hasn't been fetched\n"
+             f"       images: {config.FIRMWARE_DIR}/<board>/<face|cam|neck>-fw-<x.y.z>-app.bin")
+
+
+def _image_server() -> firmware.ImageServer:
+    global fw_server
+    if fw_server is None:
+        fw_server = firmware.ImageServer(config.OTA_PORT, config.OTA_TOKEN_SECONDS)
+        fw_server.on_served = _ota_served
+    return fw_server
+
+
+def _ota_note(role: str, text: str) -> None:
+    print(f"ota {role}: {text}")
+
+
+def _ota_drop(role: str) -> dict | None:
+    u = updates.pop(role, None)
+    if u and u.get("token") and fw_server is not None:
+        asyncio.ensure_future(fw_server.revoke(u["token"]))
+    return u
+
+
+def _ota_forget_stale(now: float | None = None) -> None:
+    """An update that never finished (board gone quiet) stops blocking new ones."""
+    now = time.time() if now is None else now
+    limit = config.OTA_TOKEN_SECONDS + config.OTA_REBOOT_SECONDS
+    for role, u in list(updates.items()):
+        if now - u["since"] > limit:
+            _ota_drop(role)
+            _ota_note(role, f"no word from the board about {u['version']} for {limit} s; giving up (check its console: ota)")
+
+
+def _ota_served(grant: firmware.Grant, ok: bool, why: str) -> None:
+    role = grant.image.board
+    u = updates.get(role)
+    if u is None or u.get("token") != grant.token:
+        return
+    if ok:
+        u["stage"] = "fetched"
+        _ota_note(role, f"image sent to {grant.peer} ({grant.image.size:,} bytes); the board checks it")
+    elif u["stage"] == "sent":
+        _ota_drop(role)
+        _ota_note(role, f"FAILED: {why}")
+
+
+def ota_overview() -> list[str]:
+    _ota_forget_stale()
+    images = fw_store.scan()
+    lines = []
+    for role in firmware.BOARDS:
+        d = devices.owner(role)
+        if d is None:
+            state = "not connected"
+        else:
+            state = f"{d.who} fw {d.fw}" + ("" if d.extra.get("ota") else "  (no OTA yet: one USB flash)")
+        have = images.get(role, [])
+        newest = fw_store.find(role)
+        avail = ", ".join(i.version + ("*" if newest is not None and i == newest else "") for i in have) or "none"
+        line = f"  {role:<7} {state:<34} images: {avail}"
+        u = updates.get(role)
+        if u:
+            line += f"  [updating to {u['version']}: {u['stage']}" + (f" {u['pct']}%" if u.get("pct") is not None else "") + "]"
+        lines.append(line)
+    lines.append("  (* = what `ota <board>` installs)")
+    lines += [f"  ! {p}" for p in fw_store.problems]
+    return lines
+
+
+async def start_ota(name: str, version: str | None = None, force: bool = False, badsha: bool = False) -> str:
+    """Send one board a one-time link to a new app image. Raises ValueError
+    with the reason when it won't."""
+    _ota_forget_stale()
+    role = firmware.board_name(name)
+    if role is None:
+        raise ValueError(f"which board? {', '.join(firmware.BOARDS)}")
+    if version is not None and firmware.parse_version(version) is None:
+        raise ValueError(f"{version!r} is not a version like 0.4.1")
+    device = devices.owner(role)
+    if device is None:
+        raise ValueError(f"no {role} board connected")
+    if device.roles != frozenset({role}):
+        raise ValueError(f"{device.who} does {roles_text(device.roles)}; OTA is only for single-role boards")
+    if not device.extra.get("ota"):
+        raise ValueError(f"{device.who} (fw {device.fw}) can't update over the air; flash the OTA firmware over USB once")
+    if role in updates:
+        raise ValueError(f"already updating to {updates[role]['version']} ({updates[role]['stage']}); `ota cancel {role}` to drop it")
+    image = fw_store.find(role, version)
+    if image is None:
+        what = f"{firmware.BOARDS[role]}-{version}-app.bin" if version else "any image"
+        raise ValueError(f"{what} not in {config.FIRMWARE_DIR / role}" +
+                         (f" (problems: {'; '.join(fw_store.problems)})" if fw_store.problems else ""))
+    current = firmware.parse_version(device.fw)
+    if not force:
+        if current is None:
+            raise ValueError(f"the board reports fw {device.fw!r}, which I can't compare; add force")
+        if image.key == current:
+            raise ValueError(f"{role} already runs {device.fw}; add force to reinstall")
+        if image.key < current:
+            raise ValueError(f"{image.version} is older than {device.fw} (a downgrade); add force if you mean it")
+    host = device.extra.get("local") or ""
+    if not host:
+        raise ValueError("don't know which address the board reached me on")
+    url, grant = await _image_server().grant(image, device.peer, host)
+    sha = image.sha256
+    if badsha:
+        sha = sha[:-1] + ("0" if sha[-1] != "0" else "1")    # one digit off: the board must refuse it
+    updates[role] = {"version": image.version, "from": device.fw, "token": grant.token, "stage": "sent",
+                     "pct": None, "since": time.time(), "board": device.who, "badsha": badsha}
+    msg = {"type": "ota", "url": url, "sha256": sha, "size": image.size, "version": image.version}
+    if not await _send(device.conn, json.dumps(msg)):
+        _ota_drop(role)
+        raise ValueError(f"{device.who} went away")
+    note = "  (TEST: wrong sha256 on purpose; the board must refuse)" if badsha else ""
+    return (f"{device.fw} -> {image.version} ({image.size:,} bytes, sha256 {image.sha256[:12]}...), "
+            f"link valid {config.OTA_TOKEN_SECONDS // 60} min{note}")
+
+
+def ota_board_message(device: Device, event: dict) -> None:
+    """ota_progress / ota_result from a board that has an update in flight."""
+    role = next((r for r in updates if r in device.roles and devices.owner(r) is device), None)
+    if role is None:
+        return
+    u = updates[role]
+    if event.get("type") == "ota_progress":
+        try:
+            pct = max(0, min(100, int(event.get("pct"))))
+        except (TypeError, ValueError):
+            return
+        u["pct"] = pct
+        _ota_note(role, f"{pct}%")
+        return
+    if event.get("ok") is True:
+        u["stage"] = "written"
+        _ota_note(role, f"written and checked; rebooting into {u['version']}")
+    else:
+        _ota_drop(role)
+        why = str(event.get("error") or "no reason given")[:200]
+        expected = " (expected: this was the badsha test)" if u.get("badsha") else ""
+        _ota_note(role, f"REFUSED by the board: {why}; still on {u['from']}{expected}")
+
+
+def ota_board_back(device: Device) -> None:
+    """A board said hello: if it was being updated, did the new version take?"""
+    if device.extra.get("rolled_back"):
+        print(f"ota: {device.who} rolled back from {device.extra['rolled_back']} "
+              f"(the new image didn't reach the brain in time); running {device.fw}")
+    for role in list(updates):
+        if role not in device.roles:
+            continue
+        u = updates[role]
+        if device.fw == u["version"]:
+            _ota_drop(role)
+            _ota_note(role, f"now running {device.fw}. Done.")
+        elif u["stage"] == "written":
+            _ota_drop(role)
+            _ota_note(role, f"came back on {device.fw}, not {u['version']}: the new image rolled back")
+        else:
+            # A WiFi blip mid-download: the board keeps downloading and
+            # reports on its new connection.
+            _ota_note(role, f"reconnected during the download (still {device.fw}); waiting for its result")
+
+
+async def ota_command(arg: str) -> None:
+    words = arg.split()
+    if not words:
+        print("\n".join(ota_overview()))
+        return
+    if words[0] in ("help", "?"):
+        print(OTA_USAGE)
+        return
+    if words[0] == "cancel":
+        role = firmware.board_name(words[1]) if len(words) > 1 else None
+        if role is None or role not in updates:
+            print("nothing to cancel" if role else "usage: ota cancel <face|camera|neck>")
+            return
+        u = _ota_drop(role)
+        _ota_note(role, f"cancelled (the link to {u['version']} no longer works)")
+        return
+    name, version, force, badsha = words[0], None, False, False
+    for w in words[1:]:
+        if w == "force":
+            force = True
+        elif w == "badsha":
+            badsha = True
+        elif version is None and firmware.parse_version(w) is not None:
+            version = w
+        else:
+            print(OTA_USAGE)
+            return
+    if badsha and version is None:
+        print("badsha needs an explicit version (ota <board> <version> badsha)")
+        return
+    try:
+        print(f"ota {firmware.board_name(name) or name}: {await start_ota(name, version, force or badsha, badsha)}")
+    except ValueError as e:
+        print(f"ota: {e}")
+
+
 async def handle_console_line(line: str) -> bool:
     """Returns False when the server should shut down."""
     line = line.strip()
@@ -501,6 +720,8 @@ async def handle_console_line(line: str) -> bool:
             return True
         if not sent:
             print("no face connected")
+    elif cmd == "ota":
+        await ota_command(arg)
     elif cmd == "mouthdelay":
         lo, hi = TUNABLE["MOUTH_DELAY_SECONDS"]
         if arg:
@@ -516,7 +737,7 @@ async def handle_console_line(line: str) -> bool:
         else:
             print(f"mouth delay = {config.MOUTH_DELAY_SECONDS:g} s")
     else:
-        print("commands: ask <q> | say <text> | volume <0-1> | mouthdelay [s] | camres [qvga|vga|svga|hd] | gaze <x> <y> [ms] | gaze off | listen | mic | track on|off | emo <name> | pan <deg> | tilt <deg> | status | quit")
+        print("commands: ask <q> | say <text> | volume <0-1> | mouthdelay [s] | camres [qvga|vga|svga|hd] | gaze <x> <y> [ms] | gaze off | ota [board] | listen | mic | track on|off | emo <name> | pan <deg> | tilt <deg> | status | quit")
     return True
 
 

@@ -23,10 +23,12 @@ it concerns (`server/brain/devices.py`, ROUTES):
 | `pan`, `tilt`, `glance` | neck |
 | `mouth`, `gaze` | face |
 | `emotion`, `asleep` | every board |
+| `ota` | the one board named in the console's `ota <board>` (face, camera or neck) |
 
 and only accepts board messages from the matching role: mic audio from the
 mic, camera frames from the camera, `speak_done`, `abort` and `mouth` from
-the speaker, `wake` from the mic, `touch` from the face, `camera` from the camera.
+the speaker, `wake` from the mic, `touch` from the face, `camera` from the camera,
+`ota_progress`/`ota_result` only from a board with an update in flight.
 
 HAIL-E's layout: the Yahboom voice board (through `server/bridge/`, which
 translates the Xiaozhi protocol) = `mic` + `speaker`; the XIAO = `camera`
@@ -49,7 +51,13 @@ The rest of the frame is the payload.
 {"type": "touch", "gesture": "tap"}   // face: tap | long | swipe_l | swipe_r. Tap wakes him, long press = sleep
 {"type": "mouth", "level": 0.62}  // speaker: how open his mouth is right now, 0..1 (see Mouth sync)
 {"type": "camera", "res": "vga", "w": 640, "h": 480}  // camera: its picture size, on connect and after every change
+{"type": "ota_progress", "pct": 40}   // face/camera/neck: firmware download progress, about every 10% (see Firmware updates)
+{"type": "ota_result", "ok": false, "error": "sha256 mismatch"}  // the download is checked (ok: rebooting into it) or refused
 ```
+
+A board that can update over the air adds `"ota": true` to its hello, and
+`"ota_rollback": "0.4.1"` after it rolled back from a new image that never
+reached the brain.
 
 Binary `0x01` frames: microphone audio, 16 kHz mono signed 16-bit PCM,
 little-endian, 30 ms (480 samples) per frame.
@@ -75,6 +83,7 @@ the latest frame for the live-view page, the face tracker, and the language mode
 {"type": "mouth", "level": 0.62}  // face: open the mouth this far (0 = closed); it closes by itself 300 ms after the last one
 {"type": "gaze", "x": 0.8, "y": 0.0, "hold_ms": 3000}  // face: look there (-1..1, +x screen right, +y down); hold_ms optional
 {"type": "gaze", "release": true} // face: go back to idle glances now
+{"type": "ota", "url": "http://192.168.1.99:8767/fw/<token>", "sha256": "…", "size": 1234567, "version": "0.4.1"}  // one board: fetch and install this app image
 ```
 
 The server sends `stream on` at `CAMERA_FPS` when the robot connects. The
@@ -155,3 +164,43 @@ rest tilt and lets the servos go limp; waking brings it back to 0/0.
 
 Keep this file in sync with `firmware/src/link.cpp` and `server/brain/main.py`
 whenever a message type is added.
+
+## Firmware updates (face, camera, neck)
+
+The robot's own boards update over the air from the brain (patch 0018; the
+Yahboom keeps Xiaozhi's own OTA through the bridge). The board pulls; nothing
+is pushed into it.
+
+- **Store (ai1, outside git):** `server/firmware/<face|camera|neck>/<face|cam|neck>-fw-<x.y.z>-app.bin`
+  and `server/firmware/manifest.json` (board, version, file, sha256, size).
+  `python -m tools.fw_add <board> <file>` copies an image in and records it;
+  a correctly named file dropped in is found too. An entry whose file no
+  longer matches its recorded sha256/size is refused. A version may carry a
+  suffix (`0.4.2-rbtest`); such test builds sort below the plain version and
+  are only installed when named.
+- **Console:** `ota` lists the boards, their firmware and the images;
+  `ota <board> [version] [force]` sends that board (only that board, and only
+  if it holds just that one role and said `"ota": true`) an `ota` message.
+  Refused: board not connected, no OTA firmware yet, same version or a
+  downgrade without `force`, an update already in flight (`ota cancel <board>`).
+  `ota <board> <version> badsha` sends a deliberately wrong sha256 to prove the
+  board refuses it.
+- **Download link:** `http://<the address the board reached the brain on>:8767/fw/<token>`
+  (`OTA_PORT`). The port is open only while a link is waiting. Each token is
+  random, serves one image once, only to that board's IP, and expires after
+  `OTA_TOKEN_SECONDS` (300). Everything else gets 404/403/410; the live view
+  (8766) and its password are untouched.
+- **Board:** streams the image into the spare OTA slot, hashes it on the
+  way, reports `ota_progress` every ~10 %, and only if the size and sha256
+  match finishes the slot and reboots (`ota_result` ok). Otherwise the slot
+  is abandoned (the first bytes are never written, so it can't boot) and it
+  reports `ota_result` with the error. While downloading, the face shows
+  "thinking", the camera pauses its stream and the neck ignores moves.
+- **Rollback:** the new image starts on trial (`verifyRollbackLater()`); it
+  marks itself valid only after the brain has answered its hello. If that
+  hasn't happened within 60 s, or it crashes first, the bootloader goes back
+  to the previous image, which then says `"ota_rollback": "<version>"` in its
+  hello. The brain prints "now running x.y.z. Done." or that it rolled back.
+- **After an OTA the board may be running from `ota_1`.** A later USB app-only
+  flash at 0x10000 (`ota_0`) must also reset the boot choice:
+  `esptool --port COMx write-flash 0xe000 boot_app0.bin 0x10000 <app>.bin`.

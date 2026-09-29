@@ -34,3 +34,6 @@ docs/cad/
 
 # Codex CLI project config (written by the Fusion MCP add-in)
 .codex/
+
+# Board firmware images for OTA (server/firmware/, brain/firmware.py): kept on ai1, never in git
+server/firmware/

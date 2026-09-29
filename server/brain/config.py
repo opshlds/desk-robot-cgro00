@@ -210,6 +210,16 @@ LIVE_VIEW_BIND = os.environ.get("LIVE_VIEW_BIND") or "127.0.0.1"
 # 127.0.0.1: the page shows the camera and can make Rocky talk. Plain HTTP,
 # so it keeps out housemates and IoT gadgets, not someone sniffing the WiFi.
 LIVE_VIEW_PASSWORD = os.environ.get("LIVE_VIEW_PASSWORD", "")
+
+# Over-the-air updates for the face, camera and neck boards (brain/firmware.py,
+# console `ota`). Images live outside git in FIRMWARE_DIR/<board>/. While an
+# update is waiting, a one-time link on OTA_PORT serves that one image to that
+# one board, at the address the board reaches the brain on; the port is closed
+# the rest of the time. Links expire after OTA_TOKEN_SECONDS.
+FIRMWARE_DIR = Path(os.environ.get("FIRMWARE_DIR") or Path(__file__).resolve().parent.parent / "firmware")
+OTA_PORT = int(os.environ.get("OTA_PORT") or 8767)
+OTA_TOKEN_SECONDS = 300
+OTA_REBOOT_SECONDS = 150    # how long to wait for the board to come back on the new version
 SEND_CAMERA_TO_BRAIN = True  # let Rocky see the camera when a question is about seeing
 # A frame is attached only when the question is about seeing (any of these
 # words or phrases). Everyday words like "this", "that", "here", "there" and
