@@ -39,6 +39,8 @@ The rest of the frame is the payload.
 ```json
 {"type": "hello", "who": "desk-robot", "fw": "0.3.0", "token": "..."}  // must be the first message; token = ROBOT_TOKEN
 {"type": "hello", "who": "xiaozhi-bridge", "fw": "2.2.6", "token": "...", "roles": ["mic", "speaker"]}  // a board with some roles
+{"type": "hello", "who": "neck", "fw": "0.1.0", "token": "...", "roles": ["neck"], "limits": {"pan": [-40, 40], "tilt": [-30, 0]}}  // neck: its calibrated limits
+{"type": "limits", "limits": {"pan": [-55, 55], "tilt": [-40, 20]}}  // neck: limits changed on its console
 {"type": "wake", "word": "Computer"}   // mic: the board's own wake word fired; stay awake, the question follows
 {"type": "abort"}                 // speaker: the human interrupted; stop the reply that is playing
 {"type": "state", "pan": 12.5, "emotion": "neutral"}
@@ -136,6 +138,20 @@ All of these are in `face_params.json` (`layout`) and can be previewed in Face L
 Firmware side: `firmware/src/link.cpp` maps each server message onto the
 same text commands the USB console uses (`emo`, `pan`, `tilt`), so both
 paths behave identically. The robot sends `state` every 5 s.
+
+## Neck limits
+
+The neck board (`firmware-neck/`, neck-fw 0.1.0+) is calibrated on its own
+USB console and keeps the result: `limits pan|tilt <min> <max>` in head
+degrees (0 = straight ahead / level; pan − = his left, tilt − = down). It
+reports them in its hello and again with a `limits` message whenever they
+change. The brain clamps every head move to them: the `look` tool (which
+offers `up` only when tilt max is above 0), face tracking, and the web
+console's sliders. Limits must satisfy −90 ≤ min ≤ 0 ≤ max ≤ 90 and min < max;
+anything else is ignored. With no neck connected, or a neck that doesn't
+report limits, `TRACK_PAN_LIMIT` / `TRACK_TILT_MIN` / `TRACK_TILT_MAX` in
+`config.py` apply. When he falls asleep (`asleep` on) the neck bows to its
+rest tilt and lets the servos go limp; waking brings it back to 0/0.
 
 Keep this file in sync with `firmware/src/link.cpp` and `server/brain/main.py`
 whenever a message type is added.

@@ -238,6 +238,8 @@ TRACK_GAIN = 0.5           # fraction of the error corrected per frame (lower = 
 TRACK_DEADBAND = 0.10      # ignore errors smaller than this fraction of half-frame
 TRACK_PAN_SIGN = 1         # flip to -1 if the head turns AWAY from you
 TRACK_TILT_SIGN = 1        # flip to -1 if it nods the wrong way
+# The next three are only used until a neck board reports its own limits
+# (neck-fw sends its calibrated limits in the hello; see firmware-neck/README.md).
 TRACK_PAN_LIMIT = 60.0     # must match PAN_MIN/MAX_DEG in firmware config.h
 TRACK_TILT_MIN = -60.0     # must match TILT_MIN/MAX_DEG in firmware config.h
 TRACK_TILT_MAX = 0.0

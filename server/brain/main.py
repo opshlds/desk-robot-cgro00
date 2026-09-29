@@ -71,6 +71,55 @@ current_emotion = "neutral"
 speaker_volume = 0.7        # mirrors firmware SPEAKER_VOLUME until changed here
 thinking = False            # a reply is being composed (before it's spoken)
 camera_info: dict | None = None  # {"res", "w", "h"} as the camera board last reported it
+# The head's limits as the neck board reports them (its calibration, saved on
+# the board): {"pan": (min, max), "tilt": (min, max)}. None = no neck said so;
+# config.TRACK_* limits apply.
+neck_limits: dict | None = None
+
+
+def parse_limits(raw) -> dict | None:
+    """{"pan": [min, max], "tilt": [min, max]} from a neck board, or None if
+    it isn't that shape (-90 <= min <= 0 <= max <= 90, min < max)."""
+    if not isinstance(raw, dict):
+        return None
+    out = {}
+    for axis in ("pan", "tilt"):
+        pair = raw.get(axis)
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            return None
+        try:
+            lo, hi = float(pair[0]), float(pair[1])
+        except (TypeError, ValueError):
+            return None
+        if not (-90 <= lo <= 0 <= hi <= 90 and lo < hi):
+            return None
+        out[axis] = (lo, hi)
+    return out
+
+
+def head_limits() -> tuple[float, float, float, float]:
+    """pan_min, pan_max, tilt_min, tilt_max: the neck's own if it reported
+    them, else config.TRACK_*."""
+    if neck_limits:
+        return (*neck_limits["pan"], *neck_limits["tilt"])
+    return (-config.TRACK_PAN_LIMIT, config.TRACK_PAN_LIMIT, config.TRACK_TILT_MIN, config.TRACK_TILT_MAX)
+
+
+def forget_neck() -> None:
+    global neck_limits
+    neck_limits = None
+
+
+def note_neck_limits(raw) -> None:
+    global neck_limits
+    lim = parse_limits(raw)
+    if lim is None:
+        if raw is not None:
+            print(f"(neck sent limits I can't use: {raw!r})")
+        return
+    if lim != neck_limits:
+        neck_limits = lim
+        print(f"neck limits: pan {lim['pan'][0]:g}..{lim['pan'][1]:g}, tilt {lim['tilt'][0]:g}..{lim['tilt'][1]:g}")
 TUNABLE = {                 # config knobs the console may change live: (min, max)
     "VAD_THRESHOLD": (0.1, 0.95),
     "TURN_THRESHOLD": (0.1, 0.95),
@@ -182,6 +231,7 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
     if "camera" in roles:
         await _send(websocket, json.dumps({"type": "stream", "on": True, "fps": config.CAMERA_FPS}))
     if "neck" in roles:
+        note_neck_limits(hello.get("limits"))
         # No idle head glances: they fight deliberate looks. The eyes still move.
         await _send(websocket, json.dumps({"type": "glance", "on": False}))
     if "face" in roles:
@@ -209,6 +259,9 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
                 continue
             if kind == "camera" and "camera" in roles:
                 note_camera(event)
+                continue
+            if kind == "limits" and "neck" in roles:
+                note_neck_limits(event.get("limits"))  # recalibrated on the board's console
                 continue
             if kind == "temp":
                 try:
@@ -242,6 +295,8 @@ async def handle_robot(websocket: websockets.ServerConnection) -> None:
                 robot_speak_done.set()  # don't leave a reply waiting for a board that's gone
             if "camera" in roles:
                 forget_camera()
+            if "neck" in roles:
+                forget_neck()
             pick_mic_source()
 
 
@@ -469,8 +524,9 @@ async def handle_console_line(line: str) -> bool:
 
 async def look(args: dict) -> tuple[str, bytes | None]:
     """Move the head, wait for it to get there, and grab a fresh frame.
-    Only the axis that was asked for moves: "left"/"right" pan, "down"/
-    "level" tilt, "center" both."""
+    Only the axis that was asked for moves: "left"/"right" pan, "down"/"up"/
+    "level" tilt, "center" both. Clamped to the neck's own limits."""
+    pan_min, pan_max, tilt_min, tilt_max = head_limits()
     pan = tracker.pan if tracker else 0.0
     tilt = tracker.tilt if tracker else 0.0
     move_pan = move_tilt = False
@@ -484,14 +540,18 @@ async def look(args: dict) -> tuple[str, bytes | None]:
         pan, move_pan = (-deg if d == "left" else deg), True
     elif d == "down":
         tilt, move_tilt = -(amount if amount is not None else 30.0), True  # a normal glance down; ask for degrees to go further
+    elif d == "up":
+        if tilt_max < 1:
+            return ("Your neck can't tilt above level; you are already as high as it goes.", None)
+        tilt, move_tilt = (amount if amount is not None else 20.0), True
     elif d == "level":
-        tilt, move_tilt = config.TRACK_TILT_MAX, True
+        tilt, move_tilt = 0.0, True
     elif d == "center":
-        pan, tilt, move_pan, move_tilt = 0.0, config.TRACK_TILT_MAX, True, True
+        pan, tilt, move_pan, move_tilt = 0.0, 0.0, True, True
     if not (move_pan or move_tilt):
-        return ("Say where to look: left, right, down, level, or center.", None)
-    pan = max(-config.TRACK_PAN_LIMIT, min(config.TRACK_PAN_LIMIT, pan))
-    tilt = max(config.TRACK_TILT_MIN, min(config.TRACK_TILT_MAX, tilt))
+        return ("Say where to look: left, right, down, up, level, or center.", None)
+    pan = max(pan_min, min(pan_max, pan))
+    tilt = max(tilt_min, min(tilt_max, tilt))
 
     if tracker is not None and tracker.enabled:
         await set_tracking(False, announce=False)  # tracking would drag the head back
@@ -509,15 +569,21 @@ async def look(args: dict) -> tuple[str, bytes | None]:
             break
         await asyncio.sleep(0.1)
     jpeg = eyes.latest()
+    return (head_words(pan, tilt) + (" Fresh camera image attached." if jpeg else " No camera image available."), jpeg)
+
+
+def head_words(pan: float, tilt: float) -> str:
+    """Where the head is, in words, including whether it's at a limit."""
+    pan_min, pan_max, tilt_min, tilt_max = head_limits()
     pan_word = "left" if pan < -5 else "right" if pan > 5 else "center"
-    if tilt <= config.TRACK_TILT_MIN + 0.5:
-        tilt_word = "down, as far as it goes"
-    elif tilt >= config.TRACK_TILT_MAX - 0.5:
-        tilt_word = "level, as high as it goes"
-    else:
-        tilt_word = "down" if tilt < -5 else "level"
-    where = f"Head is now at pan {pan:.0f} deg ({pan_word}), tilt {tilt:.0f} deg ({tilt_word})."
-    return (where + (" Fresh camera image attached." if jpeg else " No camera image available."), jpeg)
+    if pan <= pan_min + 0.5 or pan >= pan_max - 0.5:
+        pan_word += ", as far as it turns"
+    tilt_word = "down" if tilt < -5 else "up" if tilt > 5 else "level"
+    if tilt <= tilt_min + 0.5:
+        tilt_word += ", as low as it goes"
+    elif tilt >= tilt_max - 0.5:
+        tilt_word += ", as high as it goes"
+    return f"Head is now at pan {pan:.0f} deg ({pan_word}), tilt {tilt:.0f} deg ({tilt_word})."
 
 
 head_held = False  # he was told to look somewhere and is holding that pose
@@ -899,6 +965,7 @@ def console_state() -> dict:
         "emotion": current_emotion,
         "voice": {k: getattr(config, k) for k in VOICE_TUNABLE},
         "head_held": head_held,
+        "head_limits": dict(zip(("pan_min", "pan_max", "tilt_min", "tilt_max"), head_limits())),
         "tracking_enabled": tracker.enabled if tracker is not None else False,
         "volume": speaker_volume,
         "camera": {"connected": devices.owner("camera") is not None, **(camera_info or {}),
@@ -932,8 +999,9 @@ async def _console_command(action: str, payload: dict) -> dict:
             raise ValueError(f"emotions: {', '.join(config.EMOTIONS)}")
         await send_to_robot({"type": "emotion", "name": name})
     elif action == "head":
-        pan = _number(payload, "pan", -config.TRACK_PAN_LIMIT, config.TRACK_PAN_LIMIT)
-        tilt = _number(payload, "tilt", config.TRACK_TILT_MIN, config.TRACK_TILT_MAX)
+        pan_min, pan_max, tilt_min, tilt_max = head_limits()
+        pan = _number(payload, "pan", pan_min, pan_max)
+        tilt = _number(payload, "tilt", tilt_min, tilt_max)
         if tracker is not None and tracker.enabled:
             await set_tracking(False)
         await set_head_held(True)
@@ -1252,6 +1320,7 @@ async def main() -> None:
     main_loop = loop
     brain = RobotBrain(ABILITIES, situation)
     tracker = Tracker(eyes, lambda p, t, on: loop.call_soon_threadsafe(head_moves.put_nowait, (p, t, on)))
+    tracker.limits = head_limits
     eyes.has_annotator = True
     tracker.start()
     print("face tracking:", "on" if config.TRACKING else f"off — say \"{config.ROBOT_NAME}, track me\" or type `track on`")

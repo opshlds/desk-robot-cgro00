@@ -372,6 +372,11 @@
       $("rtrack").textContent = s.tracking ? "face locked" : s.tracking_enabled ? "looking for a face" : s.head_held ? "holding" : "not tracking";
       $("rtrack").className = s.tracking ? "" : "off";
       $("headnote").textContent = s.head_held ? "holding a pose · glances paused" : "";
+      const lim = s.head_limits;
+      if (lim) {
+        $("pan").min = lim.pan_min; $("pan").max = lim.pan_max;
+        $("tilt").min = lim.tilt_min; $("tilt").max = lim.tilt_max;
+      }
       if (!dragging.has("pan")) { $("pan").value = Math.round(pan); $("panv").textContent = Math.round(pan) + "°"; }
       if (!dragging.has("tilt")) { $("tilt").value = Math.round(tilt); $("tiltv").textContent = Math.round(tilt) + "°"; }
       if (s.volume != null && document.activeElement !== $("vol")) { $("vol").value = s.volume; $("volv").textContent = (+s.volume).toFixed(2); }

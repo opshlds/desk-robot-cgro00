@@ -43,6 +43,10 @@ class Tracker:
         self._size = (0, 0)
         self._last_sent = 0.0
         self._lost_reported = True
+        # pan_min, pan_max, tilt_min, tilt_max; main.py points this at the
+        # neck board's reported limits.
+        self.limits: Callable[[], tuple[float, float, float, float]] = lambda: (
+            -config.TRACK_PAN_LIMIT, config.TRACK_PAN_LIMIT, config.TRACK_TILT_MIN, config.TRACK_TILT_MAX)
 
     def start(self) -> None:
         threading.Thread(target=self._run, daemon=True).start()
@@ -98,14 +102,15 @@ class Tracker:
         ex = ((x + fw / 2) - w / 2) / (w / 2)   # -1 (left edge) .. +1 (right edge)
         ey = ((y + fh / 2) - h / 2) / (h / 2)   # -1 (top) .. +1 (bottom)
         moved = False
+        pan_min, pan_max, tilt_min, tilt_max = self.limits()
         if abs(ex) > config.TRACK_DEADBAND:
             self.pan += config.TRACK_PAN_SIGN * ex * (config.TRACK_HFOV / 2) * config.TRACK_GAIN
-            self.pan = max(-config.TRACK_PAN_LIMIT, min(config.TRACK_PAN_LIMIT, self.pan))
+            self.pan = max(pan_min, min(pan_max, self.pan))
             moved = True
         if abs(ey) > config.TRACK_DEADBAND:
             # Face above center → look up (tilt toward its max); below → look down.
             self.tilt += config.TRACK_TILT_SIGN * (-ey) * (config.TRACK_VFOV / 2) * config.TRACK_GAIN
-            self.tilt = max(config.TRACK_TILT_MIN, min(config.TRACK_TILT_MAX, self.tilt))
+            self.tilt = max(tilt_min, min(tilt_max, self.tilt))
             moved = True
         became_tracking = not self.tracking
         self.tracking = True
