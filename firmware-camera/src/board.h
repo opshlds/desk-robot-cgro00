@@ -1,7 +1,13 @@
 #pragma once
 // Seeed XIAO ESP32-S3 Sense: what this firmware uses.
 
-#define CAM_FW_VERSION "0.1.2"
+// The version can be overridden by a build env (platformio.ini: the OTA test builds).
+#ifndef CAM_FW_VERSION
+#define CAM_FW_VERSION "0.2.0"
+#endif
+#ifndef FW_NOTE
+#define FW_NOTE ""            // extra boot line (test builds say what they are)
+#endif
 
 // User LED (orange, next to USB-C), active low. On = connected to the brain.
 constexpr int PIN_LED = 21;

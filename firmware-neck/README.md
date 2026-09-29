@@ -4,7 +4,8 @@ Firmware for an **ESP32-C3 dev board** (DevKitM-1, SuperMini, ...) that drives t
 
 | Version | What |
 |---|---|
-| **0.1.0** | role `neck`; smooth, speed-capped moves; calibration saved on the board (limits, trim, direction, speed, relax, pins); limits reported to the brain; head bows while he sleeps |
+| **0.1.1** | OTA from the brain (two app slots: `min_spiffs.csv`, sha256, rollback unless the brain answers), `ota` on the console; `wifi` refuses a network name with quotes/brackets; `rest`, `trim`, `speed`, `limits`, `raw`, `pan`/`tilt`, `txpower` refuse anything but a number (pasted status lines) |
+| 0.1.0 | role `neck`; smooth, speed-capped moves; calibration saved on the board (limits, trim, direction, speed, relax, pins); limits reported to the brain; head bows while he sleeps |
 
 ## Wiring
 **Never power the servos from the board's 5V or 3V3 pins.** A stalled SG90 pulls about 0.7 A and browns out the board.
@@ -22,10 +23,25 @@ ESP32-C3 USB       ──────────────── PC or USB ch
 
 ## Flash (esptool, from the PC)
 ```
-esptool --port COMx write-flash 0x0 bin\neck-fw-0.1.0-factory.bin        (first time: full image)
-esptool --port COMx write-flash 0x10000 bin\neck-fw-0.1.0-app.bin       (updates: keeps the settings)
+esptool --port COMx write-flash 0x0 bin\neck-fw-0.1.1-factory.bin        (new board: full image, blanks the settings)
 ```
+**From 0.1.0 (one app slot, `huge_app.csv`) to 0.1.1 (two slots, `min_spiffs.csv`)**, keeping WiFi, token, txpower and calibration: write the partition table, reset the boot choice and write the app; the bootloader stays.
+```
+esptool --port COM11 write-flash 0x8000 bin\neck-fw-0.1.1-partitions.bin 0xe000 bin\boot_app0.bin 0x10000 bin\neck-fw-0.1.1-app.bin
+```
+(NVS at 0x9000 is in the same place in both tables. Don't use the factory image for this: it pads 0x9000 with 0xFF and wipes the settings.) After that, updates come from the brain (below).
 If the port doesn't connect: hold **BOOT**, tap **RESET**, let go of BOOT. The console (PuTTY, 115200) works on either the native USB port or the USB-serial chip, whichever the board has.
+
+## Over the air (from the brain console on ai1)
+Since 0.1.1 the board updates itself from the brain (brain patch 0018; docs/protocol.md "Firmware updates"). One USB flash of 0.1.1 first (below), then:
+```
+python -m tools.fw_add neck ~/neck-fw-<x.y.z>-app.bin     on ai1, in ~/desk-robot/server with the venv active
+ota                                                       brain console: boards, versions, images
+ota neck                                                 installs the newest image (ota neck <version> [force])
+```
+The board downloads into its spare slot, checks the size and sha256, reports progress and reboots into it. The new image is **on trial**: it keeps itself once the brain answers its hello and rolls back by itself if that hasn't happened within 60 s. `ota` on the board's console shows the running slot, its state and the last update. While it downloads, the head holds still: moves from the brain and the console are refused.
+- **After an OTA the board may run from `ota_1`.** A later USB app-only flash must also reset the boot choice, or the board keeps booting the other slot: `esptool --port COMx write-flash 0xe000 boot_app0.bin 0x10000 bin\neck-fw-<version>-app.bin` (`boot_app0.bin` is in `bin\`).
+- Test builds from the same source: `pio run -e neck_bump` (a trivial version bump, 0.1.2) and `pio run -e neck_rbtest` (0.1.3-rbtest, can never reach the brain, so it must roll back).
 
 ## First setup (console)
 ```

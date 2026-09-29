@@ -9,7 +9,13 @@
 //   tilt servo orange  -> GPIO5 (default)
 // The 3.3 V signal drives an SG90 fine.
 
-#define NECK_FW_VERSION "0.1.0"
+// The version can be overridden by a build env (platformio.ini: the OTA test builds).
+#ifndef NECK_FW_VERSION
+#define NECK_FW_VERSION "0.1.1"
+#endif
+#ifndef FW_NOTE
+#define FW_NOTE ""             // extra boot line (test builds say what they are)
+#endif
 
 // Default servo pins. Usable on the C3 for this: 0, 1, 3, 4, 5, 6, 7, 10.
 // Not 2/8/9 (boot straps), 11-17 (flash), 18/19 (USB), 20/21 (console UART).

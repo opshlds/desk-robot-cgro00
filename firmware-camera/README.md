@@ -4,7 +4,7 @@ Firmware for the **Seeed XIAO ESP32-S3 Sense** with its camera/mic expansion boa
 
 | | |
 |---|---|
-| Version | cam-fw 0.1.2 |
+| Version | cam-fw 0.2.0 (over-the-air updates from the brain) |
 | Board | XIAO ESP32-S3 Sense: ESP32-S3R8 (8 MB octal PSRAM), 8 MB flash, OV2640 or OV3660 camera |
 | Brain | `ws://192.168.1.99:8765`, hello `{"who":"xiao-camera","roles":["camera"]}` |
 | Sends | binary `0x02` + JPEG (SVGA 800×600 by default, `res` to change) at the rate the brain asks for (`stream on`, 10 fps); `temp` every 10 s |
@@ -14,14 +14,25 @@ Firmware for the **Seeed XIAO ESP32-S3 Sense** with its camera/mic expansion boa
 `bin/cam-fw-<version>-factory.bin` is a complete image (bootloader, partitions, app), for a new board. Take the factory backup first (once):
 ```
 esptool --port COMx read-flash 0 ALL xiao-factory.bin
-esptool --port COMx write-flash 0x0 bin\cam-fw-0.1.2-factory.bin
+esptool --port COMx write-flash 0x0 bin\cam-fw-0.2.0-factory.bin
 ```
 The full image also blanks the settings area, so re-enter `token` and `wifi` afterwards. To **update** a board that is already set up, write only the app and the settings stay:
 ```
-esptool --port COMx write-flash 0x10000 bin\cam-fw-0.1.2-app.bin
+esptool --port COMx write-flash 0x10000 bin\cam-fw-0.2.0-app.bin
 ```
 If the port doesn't show up or the flash fails to connect: hold **BOOT**, plug in USB-C (or tap RESET), release BOOT.
 Restore: `esptool --port COMx write-flash 0x0 xiao-factory.bin`.
+
+## Over the air (from the brain console on ai1)
+Since 0.2.0 the board updates itself from the brain (brain patch 0018; docs/protocol.md "Firmware updates"). One USB flash of 0.2.0 first (below), then:
+```
+python -m tools.fw_add camera ~/cam-fw-<x.y.z>-app.bin     on ai1, in ~/desk-robot/server with the venv active
+ota                                                       brain console: boards, versions, images
+ota camera                                                 installs the newest image (ota camera <version> [force])
+```
+The board downloads into its spare slot, checks the size and sha256, reports progress and reboots into it. The new image is **on trial**: it keeps itself once the brain answers its hello and rolls back by itself if that hasn't happened within 60 s. `ota` on the board's console shows the running slot, its state and the last update. While it downloads, the stream pauses; it resumes if the update fails.
+- **After an OTA the board may run from `ota_1`.** A later USB app-only flash must also reset the boot choice, or the board keeps booting the other slot: `esptool --port COMx write-flash 0xe000 boot_app0.bin 0x10000 bin\cam-fw-<version>-app.bin` (`boot_app0.bin` is in `bin\`).
+- Test builds from the same source: `pio run -e camera_bump` (a trivial version bump, 0.2.1) and `pio run -e camera_rbtest` (0.2.2-rbtest, can never reach the brain, so it must roll back).
 
 ## Settings (serial console, 115200; PuTTY is fine)
 Saved on the board in NVS:

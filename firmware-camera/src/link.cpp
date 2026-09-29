@@ -6,6 +6,7 @@
 #include <WiFi.h>
 
 #include "board.h"
+#include "ota.h"
 
 namespace {
 WebSocketsClient ws;
@@ -26,6 +27,9 @@ void load() {
   host = p.getString("host", "192.168.1.99");
   port = p.getUShort("port", 8765);
   p.end();
+#ifdef OTA_TEST_NO_BRAIN
+  port = 1;                           // rollback test build: never reaches the brain
+#endif
 }
 
 void save(const char* key, const String& v) {
@@ -42,6 +46,7 @@ void sendHello() {
   doc["fw"] = CAM_FW_VERSION;
   doc["token"] = token;
   doc["roles"].add("camera");
+  ota::addHello(doc);
   String out;
   serializeJson(doc, out);
   ws.sendTXT(out);
@@ -69,8 +74,10 @@ void onEvent(WStype_t type, uint8_t* payload, size_t length) {
     case WStype_TEXT: {
       JsonDocument doc;
       if (deserializeJson(doc, payload, length)) return;
+      ota::brainAnswered();              // a new image on trial keeps itself now
       const char* t = doc["type"] | "";
-      if (!strcmp(t, "stream")) handler("stream", "", doc["fps"] | 10.0f, doc["on"] | false);
+      if (!strcmp(t, "ota")) ota::start(doc);
+      else if (!strcmp(t, "stream")) handler("stream", "", doc["fps"] | 10.0f, doc["on"] | false);
       else if (!strcmp(t, "camera")) handler("camera", doc["res"] | "", 0, true);
       else if (!strcmp(t, "asleep")) handler("asleep", "", 0, doc["on"] | false);
       // Anything else (emotion, mouth, ...) isn't for the camera.

@@ -18,6 +18,7 @@ void update(uint32_t nowMs);
 bool wifiUp();
 bool connected();
 void sendLimits();
+void send(const String& json);    // any message to the brain (OTA progress/result)
 void status();
 
 void setWifi(const String& ssid, const String& pass);

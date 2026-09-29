@@ -16,6 +16,7 @@
 #include "board.h"
 #include "console.h"
 #include "link.h"
+#include "ota.h"
 
 namespace {
 Axis pan, tilt;
@@ -91,6 +92,7 @@ void goAwake() {          // awake: straight ahead, level (or as near as the lim
 }
 
 void onBrain(const char* type, float value, bool on) {
+  if (ota::busy() && strcmp(type, "glance")) return;    // updating: the head holds still
   if (!strcmp(type, "pan")) { stopSweep(); pan.setTarget(value); }
   else if (!strcmp(type, "tilt")) { stopSweep(); tilt.setTarget(value); }
   else if (!strcmp(type, "glance")) glanceOn = on;
@@ -137,7 +139,7 @@ void help() {
       "           sweep pan|tilt (slow min -> max -> 0)   pins <pan gpio> <tilt gpio>   defaults\r\n"
       "state:     sleep on|off   glance on|off   info\r\n"
       "network:   wifi <ssid> <password>   token <ROBOT_TOKEN>   brain <host> [port]   txpower <dBm>|0   net\r\n"
-      "           reboot\r\n"
+      "           ota (update slots)   reboot\r\n"
       "Head degrees: 0 = straight ahead / level. Pan - = his left. Tilt - = down.");
 }
 
@@ -164,6 +166,15 @@ bool onOff(const String& a, bool& out) {
   return false;
 }
 
+// A console argument that is one plain number ("-20", "7.5"). Anything else,
+// e.g. a status line pasted back by PuTTY, is refused instead of read as 0.
+bool isNumber(const String& s) {
+  if (!s.length()) return false;
+  char* end = nullptr;
+  strtod(s.c_str(), &end);
+  return end && *end == 0 && end != s.c_str();
+}
+
 bool pinOk(int g) { return g == 0 || g == 1 || (g >= 3 && g <= 7) || g == 10; }
 
 void command(String line) {
@@ -179,12 +190,20 @@ void command(String line) {
   rest.trim();
   bool b;
 
+  static const char* moves[] = {"pan", "tilt", "center", "raw", "sweep", "sleep", "limits", "trim", "invert", "speed", "rest", "pins", "defaults"};
+  if (ota::busy()) {
+    for (const char* m : moves)
+      if (cmd == m && (arg.length() || cmd == "center" || cmd == "defaults")) { con::println("updating firmware - the head holds still until it's done"); return; }
+  }
+
   if (cmd == "help" || cmd == "?") help();
+  else if (cmd == "ota") ota::status();
   else if (cmd == "info") info();
   else if (cmd == "net") brainlink::status();
   else if (cmd == "pan" || cmd == "tilt") {
     Axis* a = axisNamed(cmd);
     if (!arg.length()) { axisInfo(*a); return; }
+    if (!isNumber(arg)) { con::printf("say: %s <deg>\r\n", a->name()); return; }
     stopSweep();
     a->setTarget(arg.toFloat());
     con::printf("%s -> %.1f\r\n", a->name(), a->target());
@@ -193,7 +212,7 @@ void command(String line) {
   else if (cmd == "off") { stopSweep(); pan.off(); tilt.off(); con::println("servos limp"); }
   else if (cmd == "raw") {
     Axis* a = axisNamed(a1);
-    if (!a || !rest.length()) { con::println("say: raw pan|tilt <deg>"); return; }
+    if (!a || !isNumber(rest)) { con::println("say: raw pan|tilt <deg>"); return; }
     stopSweep();
     a->setRaw(rest.toFloat());
     con::printf("%s raw %.1f (limits ignored)\r\n", a->name(), a->current());
@@ -202,7 +221,9 @@ void command(String line) {
     stopSweep();                             // or the sweep's 30 deg/s would be saved
     Axis* a = axisNamed(a1);
     int sp3 = rest.indexOf(' ');
-    if (!a || sp3 < 0) { con::println("say: limits pan|tilt <min> <max>"); return; }
+    if (!a || sp3 < 0 || !isNumber(rest.substring(0, sp3)) || !isNumber(rest.substring(sp3 + 1))) {
+      con::println("say: limits pan|tilt <min> <max>"); return;
+    }
     float lo = rest.substring(0, sp3).toFloat(), hi = rest.substring(sp3 + 1).toFloat();
     if (!(lo < hi) || lo < -90 || hi > 90 || lo > 0 || hi < 0) {
       con::println("limits must satisfy -90 <= min <= 0 <= max <= 90, min < max"); return;
@@ -216,7 +237,7 @@ void command(String line) {
   else if (cmd == "trim") {
     stopSweep();                             // or the sweep's 30 deg/s would be saved
     Axis* a = axisNamed(a1);
-    if (!a || !rest.length()) { con::println("say: trim pan|tilt <deg>  (-20..20)"); return; }
+    if (!a || !isNumber(rest)) { con::println("say: trim pan|tilt <deg>  (-20..20)"); return; }
     AxisCfg c = a->cfg(); c.trim = constrain(rest.toFloat(), -20.0f, 20.0f);
     a->configure(c); saveAxis(keyOf(a), c);
     con::printf("%s trim %+.1f saved\r\n", a->name(), c.trim);
@@ -231,7 +252,7 @@ void command(String line) {
   }
   else if (cmd == "speed") {
     Axis* a = axisNamed(a1);
-    if (!a || !rest.length()) { con::println("say: speed pan|tilt <deg/s>  (10..360)"); return; }
+    if (!a || !isNumber(rest)) { con::println("say: speed pan|tilt <deg/s>  (10..360)"); return; }
     stopSweep();
     AxisCfg c = a->cfg(); c.speed = constrain(rest.toFloat(), 10.0f, 360.0f);
     a->configure(c); saveAxis(keyOf(a), c);
@@ -247,6 +268,7 @@ void command(String line) {
   }
   else if (cmd == "rest") {
     if (!arg.length()) { con::printf("rest tilt %.0f\r\n", restTilt); return; }
+    if (!isNumber(arg)) { con::println("say: rest <tilt deg>  (a number, e.g. rest -20)"); return; }
     restTilt = constrain(arg.toFloat(), tilt.cfg().minDeg, tilt.cfg().maxDeg);
     saveRest();
     con::printf("rest tilt %.0f saved\r\n", restTilt);
@@ -290,6 +312,12 @@ void command(String line) {
   else if (cmd == "wifi") {
     int last = arg.lastIndexOf(' ');
     if (last < 1) con::println("say: wifi <ssid> <password>");
+    else if (arg.substring(0, last).indexOf('"') >= 0 || arg.substring(0, last).indexOf('(') >= 0 ||
+             arg.substring(0, last).indexOf('[') >= 0)
+      // A `net` status line pasted back in (PuTTY pastes on right-click) looks
+      // like: wifi "IOTNSFW" up (192.168.1.117, -44 dBm). Don't save that.
+      // Only the network name is checked; the password may contain anything.
+      con::println("wifi: the network name has quotes or brackets - looks like pasted console output, not saved");
     else brainlink::setWifi(arg.substring(0, last), arg.substring(last + 1));
   }
   else if (cmd == "token") { if (arg.length()) brainlink::setToken(arg); else con::println("say: token <ROBOT_TOKEN>"); }
@@ -300,6 +328,7 @@ void command(String line) {
   }
   else if (cmd == "txpower") {
     if (!arg.length()) { brainlink::status(); return; }
+    if (!isNumber(arg)) { con::println("say: txpower <2..20 dBm>, or 0 for default"); return; }
     float d = arg.toFloat();
     if (d != 0 && (d < 2 || d > 20)) { con::println("say: txpower <2..20 dBm>, or 0 for default"); return; }
     brainlink::setTxPower(d);
@@ -343,6 +372,8 @@ void setup() {
   for (int i = 0; i < 20 && !Serial; i++) delay(100);   // let a USB console attach
   delay(200);
   con::printf("\r\nHAIL-E neck-fw %s (ESP32-C3)\r\n", NECK_FW_VERSION);
+  if (FW_NOTE[0]) con::printf("%s\r\n", FW_NOTE);
+  ota::begin(NECK_FW_VERSION, [](const char* l) { con::println(l); }, [](const String& j) { brainlink::send(j); });
 
   Preferences p;
   p.begin("neck", true);
@@ -364,6 +395,16 @@ void loop() {
   uint32_t now = millis();
   if (now - lastTick >= 20) { lastTick = now; tick(now); }
   brainlink::update(now);
+  ota::update(now);
+  static bool updating = false;
+  if (ota::busy() != updating) {
+    updating = ota::busy();
+    if (updating) {                        // hold still where we are
+      stopSweep();
+      pan.setTarget(pan.current());
+      tilt.setTarget(tilt.current());
+    }
+  }
   readConsole();
   delay(1);
 }

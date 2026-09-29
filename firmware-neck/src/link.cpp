@@ -7,6 +7,7 @@
 
 #include "board.h"
 #include "console.h"
+#include "ota.h"
 
 namespace {
 WebSocketsClient ws;
@@ -28,6 +29,9 @@ void load() {
   port = p.getUShort("port", 8765);
   txDbm = p.getFloat("txdbm", 0);
   p.end();
+#ifdef OTA_TEST_NO_BRAIN
+  port = 1;                           // rollback test build: never reaches the brain
+#endif
 }
 
 void save(const char* key, const String& v) {
@@ -59,6 +63,7 @@ void sendHello() {
   doc["token"] = token;
   doc["roles"].add("neck");
   addLimits(doc);
+  ota::addHello(doc);
   sendJson(doc);
 }
 
@@ -82,8 +87,10 @@ void onEvent(WStype_t type, uint8_t* payload, size_t length) {
     case WStype_TEXT: {
       JsonDocument doc;
       if (deserializeJson(doc, payload, length)) return;
+      ota::brainAnswered();              // a new image on trial keeps itself now
       const char* t = doc["type"] | "";
-      if (!strcmp(t, "pan") || !strcmp(t, "tilt")) {
+      if (!strcmp(t, "ota")) ota::start(doc);
+      else if (!strcmp(t, "pan") || !strcmp(t, "tilt")) {
         if (doc["deg"].is<float>()) handler(t, doc["deg"].as<float>(), true);
       } else if (!strcmp(t, "glance")) handler("glance", 0, doc["on"] | false);
       else if (!strcmp(t, "asleep")) handler("asleep", 0, doc["on"] | false);
@@ -158,6 +165,12 @@ void sendLimits() {
   doc["type"] = "limits";
   addLimits(doc);
   sendJson(doc);
+}
+
+void send(const String& json) {
+  if (!isConnected) return;
+  String copy = json;
+  ws.sendTXT(copy);
 }
 
 void status() {

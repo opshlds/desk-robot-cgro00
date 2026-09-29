@@ -14,6 +14,7 @@
 #include "board.h"
 #include "camera.h"
 #include "link.h"
+#include "ota.h"
 
 Camera camera;
 bool vflip = false, hmirror = false;
@@ -87,6 +88,7 @@ bool changeRes(const Res* r) {
 void onBrain(const char* type, const char* arg, float value, bool on) {
   if (!strcmp(type, "stream")) {
     wantedFps = value;
+    if (ota::busy()) return;              // paused for the download
     camera.setStreaming(on, value);
     Serial.printf("brain: stream %s @ %.1f fps\r\n", on ? "on" : "off", camera.fps());
   } else if (!strcmp(type, "camera")) {
@@ -111,7 +113,7 @@ void help() {
       "  res qvga|vga|svga|hd  picture size: 320x240, 640x480, 800x600, 1280x720 (saved)\r\n"
       "  flip none|v|h|both    rotate/mirror the picture (saved)\r\n"
       "  stats on|off          frames captured/sent per second, every 5 s\r\n"
-      "  info   temp   reboot   help\r\n"
+      "  info   temp   ota   reboot   help\r\n"
       "  wifi <ssid> <password>   token <ROBOT_TOKEN>   brain <host> [port]   net");
 }
 
@@ -149,6 +151,7 @@ void command(String line) {
   if (cmd == "help") help();
   else if (cmd == "info") info();
   else if (cmd == "net") brainlink::status();
+  else if (cmd == "ota") ota::status();
   else if (cmd == "temp") Serial.printf("chip %.1f C\r\n", temperatureRead());
   else if (cmd == "reboot") { Serial.println("rebooting"); delay(100); ESP.restart(); }
   else if (cmd == "snap") snap();
@@ -250,6 +253,9 @@ void setup() {
   while (!Serial && millis() - t0 < 1500) delay(10);   // give the USB console a moment
 
   Serial.printf("\r\nHAIL-E cam-fw %s (XIAO ESP32-S3 Sense)\r\n", CAM_FW_VERSION);
+  if (FW_NOTE[0]) Serial.printf("%s\r\n", FW_NOTE);
+  ota::begin(CAM_FW_VERSION, [](const char* l) { Serial.printf("%s\r\n", l); },
+             [](const String& j) { brainlink::send(j); });
   jpg = static_cast<uint8_t*>(ps_malloc(JPG_CAP));
   if (!jpg || ESP.getPsramSize() == 0) Serial.println("WARNING: no PSRAM - this image needs the Sense's 8 MB octal PSRAM");
   loadFlip();
@@ -267,6 +273,16 @@ void loop() {
   readConsole();
   brainlink::update(now);
   setLed(brainlink::connected());
+  ota::update(now);
+
+  // While an update downloads, the stream pauses (WiFi and flash for the
+  // download); if it fails, the stream picks up again.
+  static bool updating = false, streamedBefore = false;
+  if (ota::busy() != updating) {
+    updating = ota::busy();
+    if (updating) { streamedBefore = camera.streaming(); camera.setStreaming(false, wantedFps); }
+    else if (streamedBefore && brainlink::connected()) camera.setStreaming(true, wantedFps);
+  }
 
   if (brainlink::connected() && camera.streaming() && jpg) {
     size_t n = camera.takeFrame(jpg, JPG_CAP);
