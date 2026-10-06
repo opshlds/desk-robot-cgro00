@@ -17,10 +17,17 @@ void Axis::begin(const char* name, const AxisCfg& cfg) {
 }
 
 void Axis::configure(const AxisCfg& c) {
+  bool flipped = cfg_.invert != c.invert;
   cfg_.minDeg = c.minDeg; cfg_.maxDeg = c.maxDeg;
   cfg_.trim = c.trim; cfg_.invert = c.invert; cfg_.speed = c.speed; cfg_.relax = c.relax;
   tgt_ = constrain(tgt_, cfg_.minDeg, cfg_.maxDeg);
-  if (on_) write(cur_);           // show the new trim right away
+  if (flipped) release();         // rewriting cur_ would swing the servo to its mirror image, maybe into a stop
+  else if (on_) write(cur_);      // show the new trim right away
+}
+
+void Axis::release() {
+  off();
+  cur_ = tgt_ = constrain(0.0f, cfg_.minDeg, cfg_.maxDeg);   // the next move starts from straight ahead / level
 }
 
 void Axis::write(float deg) {

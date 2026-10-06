@@ -4,7 +4,7 @@ Firmware for an **ESP32-C3 dev board** (DevKitM-1, SuperMini, ...) that drives t
 
 | Version | What |
 |---|---|
-| **0.1.1** | OTA from the brain (two app slots: `min_spiffs.csv`, sha256, rollback unless the brain answers), `ota` on the console; `wifi` refuses a network name with quotes/brackets; `rest`, `trim`, `speed`, `limits`, `raw`, `pan`/`tilt`, `txpower` refuse anything but a number (pasted status lines) |
+| **0.1.1** | OTA from the brain (two app slots: `min_spiffs.csv`, sha256, rollback unless the brain answers), `ota` on the console; `wifi` refuses a network name with quotes/brackets; `rest`, `trim`, `speed`, `limits`, `raw`, `pan`/`tilt`, `txpower` refuse anything but a number (pasted status lines); `invert`, `limits`, `trim`, `speed`, `relax` print the axis's full state afterwards, and `invert` releases the servo (a powered servo would otherwise swing to its mirror position); `rest` stays inside the tilt limits and the clamp is saved; defaults suit an up-only tilt (`limits tilt 0 20`, `rest 0`) |
 | 0.1.0 | role `neck`; smooth, speed-capped moves; calibration saved on the board (limits, trim, direction, speed, relax, pins); limits reported to the brain; head bows while he sleeps |
 
 ## Wiring
@@ -53,13 +53,14 @@ txpower 8.5                    only if WiFi won't connect (common on C3 SuperMin
 The brain console's `status` then lists `neck (fw 0.1.0, ...) [neck]`. The servos stay limp until the first move.
 
 ## Calibration (servo power on, watch the mechanism)
-Head degrees: 0 = straight ahead / level; pan − = his left (your right as you face him); tilt − = down.
-1. `center`: the first pulse snaps both servos to 0. If the head isn't straight/level, `trim pan <deg>` / `trim tilt <deg>` until it is.
-2. `pan 20`: he should turn to *his* right. If not, `invert pan on`. Same for `tilt -20` (should look down; else `invert tilt on`).
-3. Find each end stop with small steps: `raw pan 45`, `raw pan 50`, ... stop one step **before** the bracket binds, the servo buzzes, or the Korad's current jumps. Same for `raw pan -…`, `raw tilt -…` (down) and `raw tilt …` (up, if the bracket allows it).
-4. Save them: `limits pan <min> <max>`, `limits tilt <min> <max>` (min ≤ 0 ≤ max). The brain gets them at once.
+Head degrees: 0 = straight ahead / level; pan − = his left (your right as you face him); tilt + = up, tilt − = down.
+The factory defaults (`defaults`) suit the mini FPV kit: pan −40..40, tilt **0..20, up only**, rest 0. That kit's tilt cannot bow below level (level is its mechanical bottom). A bracket that can also look down: `limits tilt -30 20` and `rest -20`.
+1. `center`: the first pulse snaps both servos to 0. If the head isn't straight/level, `trim pan <deg>` / `trim tilt <deg>` until it is. A horn that sits more than about 20° off (the `trim` range) cannot be trimmed away: with the Korad **off**, lift the head off the horn and reseat it a tooth or two (SG90: 21 teeth, about 17° each).
+2. `pan 20`: he should turn to *his* right. If not, `invert pan on`. Tilt: if level is the bottom stop, the wrong direction pushes *into* it, so test small: `limits tilt -5 5`, then `tilt 5` and `tilt -5`; + must be the free (up) one, else `invert tilt on`. **`invert` releases the servo** (limp) because a powered servo would swing to its mirror position; run `center` afterwards (watch it). Read the line it prints (`normal` or `inverted`) before moving on.
+3. Find each end stop with small steps: `raw pan 45`, `raw pan 50`, ... stop one step **before** the bracket binds, the servo buzzes, or the Korad's current jumps. Same for `raw pan -…` and `raw tilt …` (up); on a bracket that looks down also `raw tilt -…`.
+4. Save them: `limits pan <min> <max>`, `limits tilt <min> <max>` (min ≤ 0 ≤ max; an up-only tilt is `limits tilt 0 <max>`). The board prints the axis's new state and the brain gets the limits at once.
 5. `sweep pan`, `sweep tilt`: a slow min → max → 0 pass to confirm.
-6. `rest <tilt>`: how far the head bows while he sleeps (default −20).
+6. `rest <tilt>`: where the head goes while he sleeps (default 0; it is kept inside the tilt limits, and a `limits tilt` that excludes it moves it and saves that).
 7. With the face + camera on the head: if the tilt sags when the servo goes limp, `relax tilt off` (it holds, at a small current cost). `speed pan|tilt <deg/s>` if moves look too fast.
 
 `info` shows everything; `defaults` resets the calibration (WiFi and token stay).

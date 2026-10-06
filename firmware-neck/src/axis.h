@@ -28,6 +28,7 @@ class Axis {
   void setTarget(float deg);                    // clamped to the limits
   void setRaw(float deg);                       // calibration: straight there, only +-90 enforced
   void off();                                   // stop pulses now (the servo goes limp)
+  void release();                               // limp, and forget the position: the next pulse snaps to 0 (used when the direction flips)
   void update(uint32_t nowMs);                  // call every ~20 ms
   float current() const { return cur_; }
   float target() const { return tgt_; }

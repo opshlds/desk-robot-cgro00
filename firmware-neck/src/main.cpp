@@ -78,7 +78,7 @@ void stopSweep() {
   sweepStage = 0;
 }
 
-void goRest() {           // asleep: face forward, head bowed
+void goRest() {           // asleep: face forward, tilted to the rest pose (level on an up-only bracket)
   stopSweep();
   pan.setTarget(0);
   tilt.setTarget(restTilt);
@@ -230,8 +230,16 @@ void command(String line) {
     }
     AxisCfg c = a->cfg(); c.minDeg = lo; c.maxDeg = hi;
     a->configure(c); saveAxis(keyOf(a), c);
-    if (a == &tilt) restTilt = constrain(restTilt, lo, hi);
     con::printf("%s limits %.0f..%.0f saved\r\n", a->name(), lo, hi);
+    if (a == &tilt) {
+      float r = constrain(restTilt, lo, hi);
+      if (r != restTilt) {                   // keep the sleep pose inside the new limits, and remember that
+        restTilt = r;
+        saveRest();
+        con::printf("rest tilt moved to %.0f (kept inside the limits, saved)\r\n", restTilt);
+      }
+    }
+    axisInfo(*a);
     brainlink::sendLimits();
   }
   else if (cmd == "trim") {
@@ -241,14 +249,20 @@ void command(String line) {
     AxisCfg c = a->cfg(); c.trim = constrain(rest.toFloat(), -20.0f, 20.0f);
     a->configure(c); saveAxis(keyOf(a), c);
     con::printf("%s trim %+.1f saved\r\n", a->name(), c.trim);
+    axisInfo(*a);
   }
   else if (cmd == "invert") {
     stopSweep();                             // or the sweep's 30 deg/s would be saved
     Axis* a = axisNamed(a1);
     if (!a || !onOff(rest, b)) { con::println("say: invert pan|tilt on|off"); return; }
+    bool wasOn = a->powered();
     AxisCfg c = a->cfg(); c.invert = b;
     a->configure(c); saveAxis(keyOf(a), c);
     con::printf("%s %s saved\r\n", a->name(), b ? "inverted" : "normal");
+    if (wasOn && !a->powered())
+      con::println("servo released (limp): flipping the direction would swing it to the mirror position, maybe into a stop.\r\n"
+                   "`center` snaps it to 0 with the new direction - watch the mechanism");
+    axisInfo(*a);
   }
   else if (cmd == "speed") {
     Axis* a = axisNamed(a1);
@@ -257,6 +271,7 @@ void command(String line) {
     AxisCfg c = a->cfg(); c.speed = constrain(rest.toFloat(), 10.0f, 360.0f);
     a->configure(c); saveAxis(keyOf(a), c);
     con::printf("%s speed %.0f deg/s saved\r\n", a->name(), c.speed);
+    axisInfo(*a);
   }
   else if (cmd == "relax") {
     stopSweep();                             // or the sweep's 30 deg/s would be saved
@@ -265,13 +280,17 @@ void command(String line) {
     AxisCfg c = a->cfg(); c.relax = b;
     a->configure(c); saveAxis(keyOf(a), c);
     con::printf("%s relax %s saved\r\n", a->name(), b ? "on (goes limp at rest)" : "off (holds its position)");
+    axisInfo(*a);
   }
   else if (cmd == "rest") {
     if (!arg.length()) { con::printf("rest tilt %.0f\r\n", restTilt); return; }
     if (!isNumber(arg)) { con::println("say: rest <tilt deg>  (a number, e.g. rest -20)"); return; }
-    restTilt = constrain(arg.toFloat(), tilt.cfg().minDeg, tilt.cfg().maxDeg);
+    float want = arg.toFloat();
+    restTilt = constrain(want, tilt.cfg().minDeg, tilt.cfg().maxDeg);
     saveRest();
     con::printf("rest tilt %.0f saved\r\n", restTilt);
+    if (want != restTilt)
+      con::printf("(asked for %.0f: kept inside the tilt limits %.0f..%.0f)\r\n", want, tilt.cfg().minDeg, tilt.cfg().maxDeg);
   }
   else if (cmd == "sweep") {
     Axis* a = axisNamed(arg);
@@ -379,8 +398,10 @@ void setup() {
   p.begin("neck", true);
   AxisCfg pc = loadAxis(p, 'p', PIN_PAN_DEFAULT, PAN_MIN_DEFAULT, PAN_MAX_DEFAULT, PAN_SPEED_DEFAULT);
   AxisCfg tc = loadAxis(p, 't', PIN_TILT_DEFAULT, TILT_MIN_DEFAULT, TILT_MAX_DEFAULT, TILT_SPEED_DEFAULT);
-  restTilt = constrain(p.getFloat("rest", REST_TILT_DEFAULT), tc.minDeg, tc.maxDeg);
+  float savedRest = p.getFloat("rest", REST_TILT_DEFAULT);
+  restTilt = constrain(savedRest, tc.minDeg, tc.maxDeg);
   p.end();
+  if (restTilt != savedRest) saveRest();     // the saved sleep pose was outside the limits
   pan.begin("pan", pc);
   tilt.begin("tilt", tc);
   randomSeed(esp_random());

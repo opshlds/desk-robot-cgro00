@@ -24,11 +24,14 @@
 
 // Safe first limits, in head degrees (0 = straight ahead / level). Widen them
 // with `limits` once the real end stops are known (see the README).
+// The mini FPV pan/tilt kit's tilt only travels UP from level (level is its
+// mechanical bottom), so the tilt defaults are 0..20 up and a level rest pose.
+// A bracket that can also look down: `limits tilt -30 20`, `rest -20`.
 #define PAN_MIN_DEFAULT -40
 #define PAN_MAX_DEFAULT 40
-#define TILT_MIN_DEFAULT -30   // down
-#define TILT_MAX_DEFAULT 0     // up (0 = level)
-#define REST_TILT_DEFAULT -20  // where the head bows to while he sleeps
+#define TILT_MIN_DEFAULT 0     // level (the kit cannot bow below it)
+#define TILT_MAX_DEFAULT 20    // up
+#define REST_TILT_DEFAULT 0    // where the head goes while he sleeps (level)
 
 #define PAN_SPEED_DEFAULT 180  // deg/s ceiling
 #define TILT_SPEED_DEFAULT 120
