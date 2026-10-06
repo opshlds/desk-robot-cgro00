@@ -220,7 +220,7 @@ void start(JsonDocument& msg) {
   st = St::Running;
   logf("[ota] %s -> %s: downloading %lu bytes into %s", myVer, v.c_str(), (unsigned long)n,
        esp_ota_get_next_update_partition(nullptr)->label);
-  if (xTaskCreate(worker, "ota", 8192, nullptr, 1, nullptr) != pdPASS) {
+  if (xTaskCreate(worker, "ota", 10240, nullptr, 1, nullptr) != pdPASS) {
     st = St::Idle;
     logf("[ota] refused %s: no memory for the task", v.c_str());
     result(v, false, "no memory for the download task");
